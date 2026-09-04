@@ -43,7 +43,8 @@ async fn main() -> Result<()> {
     .map(|u| HubClient::new(u, cfg.token.clone()))
     .collect();
   let engine = Arc::new(
-    SyncEngine::new(hubs.clone(), meta, files).with_notifier(Arc::new(notifier::LogNotifier)),
+    SyncEngine::new(hubs.clone(), meta, files)
+      .with_notifier(Arc::new(notifier::LogNotifier::default())),
   );
 
   info!(
