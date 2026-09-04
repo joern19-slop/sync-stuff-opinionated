@@ -256,7 +256,7 @@ async fn push_upsert_clears_pending_and_records_new_rev() {
     .and(path("/changes"))
     .and(bearer_token("dev-token"))
     .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-        { "path": "a.txt", "status": "ok", "rev": "2-b" }
+        { "path": "a.txt", "rev": "2-b" }
     ])))
     .mount(&server)
     .await;
@@ -269,7 +269,6 @@ async fn push_upsert_clears_pending_and_records_new_rev() {
 
   let report = engine.push().await.unwrap();
   assert_eq!(report.pushed, 1);
-  assert!(report.conflicts.is_empty());
 
   // Pending queue is now empty.
   assert!(engine.pending().await.unwrap().is_empty());
@@ -289,13 +288,11 @@ async fn push_upsert_clears_pending_and_records_new_rev() {
 }
 
 #[tokio::test]
-async fn push_conflict_keeps_local_change_queued() {
+async fn push_error_keeps_local_change_queued() {
   let server = MockServer::start().await;
   Mock::given(method("POST"))
     .and(path("/changes"))
-    .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-        { "path": "a.txt", "status": "conflict" }
-    ])))
+    .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
     .mount(&server)
     .await;
 
@@ -305,11 +302,10 @@ async fn push_conflict_keeps_local_change_queued() {
     .await
     .unwrap();
 
-  let report = engine.push().await.unwrap();
-  assert_eq!(report.pushed, 0);
-  assert_eq!(report.conflicts, vec!["a.txt"]);
+  // The hub rejected the push; the engine surfaces the error and keeps the
+  // change queued - local work is never dropped.
+  assert!(engine.push().await.is_err());
 
-  // The local change is still queued and the content is still present.
   let pending = engine.pending().await.unwrap();
   assert_eq!(pending.len(), 1);
   assert_eq!(pending[0].path, "a.txt");
@@ -329,7 +325,7 @@ async fn delete_removes_local_file_and_pushes_a_delete() {
   Mock::given(method("POST"))
     .and(path("/changes"))
     .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-        { "path": "a.txt", "status": "ok", "rev": "3-d" }
+        { "path": "a.txt", "rev": "3-d" }
     ])))
     .mount(&server)
     .await;
@@ -384,7 +380,7 @@ async fn failover_tries_next_hub_when_first_is_unreachable() {
   Mock::given(method("POST"))
     .and(path("/changes"))
     .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-        { "path": "a.txt", "status": "ok", "rev": "1-a" }
+        { "path": "a.txt", "rev": "1-a" }
     ])))
     .mount(&server)
     .await;
@@ -446,7 +442,7 @@ async fn notifier_stays_silent_when_failover_recovers() {
   Mock::given(method("POST"))
     .and(path("/changes"))
     .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-        { "path": "a.txt", "status": "ok", "rev": "1-a" }
+        { "path": "a.txt", "rev": "1-a" }
     ])))
     .mount(&server)
     .await;

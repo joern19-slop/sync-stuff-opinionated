@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hub_api::config::Config;
 use serde_json::json;
-use protocol_types::{ChangesResponse, PushResult, PushStatus};
+use protocol_types::{ChangesResponse, PushResult};
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
@@ -105,10 +105,7 @@ async fn push_then_pull_then_fetch_roundtrips_a_file() {
   let results: Vec<PushResult> = resp.json().await.unwrap();
   assert_eq!(results.len(), 1);
   assert_eq!(results[0].path, "notes/hello.txt");
-  let PushStatus::Ok { rev } = &results[0].status else {
-    panic!("expected Ok, got {:?}", results[0].status);
-  };
-  let first_rev = rev.clone();
+  let first_rev = results[0].rev.clone();
 
   // Pulling changes surfaces the new path.
   let resp = http
@@ -137,8 +134,8 @@ async fn push_then_pull_then_fetch_roundtrips_a_file() {
   assert_eq!(&body[..], b"hello, hub");
 
   // A push with a *bogus* base_rev (not in the revision tree at all) is
-  // rejected - there is nothing to branch from. (A real-but-stale rev is
-  // handled by branching + resolving, tested below.)
+  // rejected with 409 - there is nothing to branch from. (A real-but-stale
+  // rev is handled by branching + resolving, tested below.)
   let stale_push = json!([{
       "path": "notes/hello.txt",
       "deleted": false,
@@ -154,8 +151,7 @@ async fn push_then_pull_then_fetch_roundtrips_a_file() {
     .send()
     .await
     .unwrap();
-  let results: Vec<PushResult> = resp.json().await.unwrap();
-  assert_eq!(results[0].status, PushStatus::Conflict);
+  assert_eq!(resp.status().as_u16(), 409);
 }
 
 #[tokio::test]
@@ -179,9 +175,7 @@ async fn deleting_a_file_removes_it_and_surfaces_as_a_tombstone_in_changes() {
     .await
     .unwrap();
   let results: Vec<PushResult> = resp.json().await.unwrap();
-  let PushStatus::Ok { rev } = &results[0].status else {
-    panic!("expected Ok, got {:?}", results[0].status);
-  };
+  let rev = results[0].rev.clone();
 
   let delete_body = json!([{
       "path": "to-delete.txt",
@@ -199,7 +193,7 @@ async fn deleting_a_file_removes_it_and_surfaces_as_a_tombstone_in_changes() {
     .await
     .unwrap();
   let results: Vec<PushResult> = resp.json().await.unwrap();
-  assert!(matches!(results[0].status, PushStatus::Ok { .. }));
+  assert_eq!(results.len(), 1);
 
   let resp = http
     .get(format!("{hub_url}/file/to-delete.txt"))
@@ -246,10 +240,7 @@ async fn push_text(
     .await
     .unwrap();
   let results: Vec<PushResult> = resp.json().await.unwrap();
-  match &results[0].status {
-    PushStatus::Ok { rev } => rev.clone(),
-    other => panic!("expected Ok, got {other:?}"),
-  }
+  results[0].rev.clone()
 }
 
 #[tokio::test]

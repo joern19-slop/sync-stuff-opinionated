@@ -43,20 +43,13 @@ pub struct PushChange {
   pub content_base64: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum PushStatus {
-  /// Write applied. `rev` is the new current revision for this path.
-  Ok { rev: String },
-  /// `base_rev` was stale - someone else changed this path first. The hub
-  /// branches and resolves rather than rejecting, so this is now rare; the
-  /// client should keep the change queued and re-pull via `/changes`.
-  Conflict,
-}
-
+/// The hub's acknowledgement of one pushed change. `rev` is the new current
+/// revision for the path after the write (or after branching + resolving a
+/// stale `base_rev`). A change the hub can't apply - a bogus `base_rev`, or a
+/// backend failure - is reported as an HTTP error on the whole request, never
+/// as a per-item status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushResult {
   pub path: String,
-  #[serde(flatten)]
-  pub status: PushStatus,
+  pub rev: String,
 }

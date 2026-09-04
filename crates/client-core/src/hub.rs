@@ -276,8 +276,8 @@ mod tests {
       .and(path("/changes"))
       .and(bearer_token("dev-token"))
       .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-          { "path": "a.txt", "status": "ok", "rev": "2-b" },
-          { "path": "b.txt", "status": "conflict" }
+          { "path": "a.txt", "rev": "2-b" },
+          { "path": "b.txt", "rev": "3-c" }
       ])))
       .mount(&server)
       .await;
@@ -293,5 +293,7 @@ mod tests {
     let results = client(&server).push(&changes).await.unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].path, "a.txt");
+    assert_eq!(results[0].rev, "2-b");
+    assert_eq!(results[1].rev, "3-c");
   }
 }

@@ -69,14 +69,20 @@ hub's control).
     binary carries the usual relink-object-files obligation. Fine for
     personal use; flag if you ever ship binaries.
 - **Push now branches instead of rejecting.** Per your decision, a client push
-  with a stale `base_rev` (or a brand-new path that already exists) is no
-  longer returned as `Conflict`. The hub writes the divergent edit into the
-  revision tree via `_bulk_docs` `new_edits:false`, resolves the resulting
+  with a stale `base_rev` (or a brand-new path that already exists) branches
+  the revision tree via `_bulk_docs` `new_edits:false`, resolves the resulting
   conflict in-process, and returns the final winning revision - so a client
   *never* sees an unresolved conflict, even when two devices hit the same hub.
   This is the same resolver the watcher runs for replication-induced conflicts.
   - New-file collisions (both devices create the same path) branch as an
     independent root and are merged against an **empty common ancestor**.
+- **`PushStatus::Conflict` is gone.** With branching + resolving, there is no
+  per-item "conflict" outcome anymore - `PushResult` is just `{ path, rev }`.
+  A change the hub genuinely can't apply (a bogus `base_rev`, a blind delete,
+  or a backend failure) now aborts the request with an HTTP error - `409` for
+  the client's mistake, `502` for a CouchDB problem - which the engine
+  treats like any other hub failure: failover, then notify, with the pending
+  queue left untouched (never dropped).
 - **Detection** is the watcher long-polling `_changes?include_docs=true&
   conflicts=true` and resolving any row whose winning doc carries a non-empty
   `_conflicts`; the push path additionally resolves synchronously after it
@@ -167,14 +173,13 @@ hub's control).
   `MetaStore`/`FileStore` backings. Web still needs OPFS/IndexedDB backings,
   and mobile needs the FCM-wake / foreground-open / charging-started trigger
   wiring (the core exposes `SyncEngine::sync()`; only the trigger differs).
-- **Client conflict-safety is now a fallback only.** Since the hub branches +
-  resolves stale pushes, a client's `Conflict` result is rare (a genuinely
-  unresolvable or bogus `base_rev`, or a hub that's mid-failure). The engine
-  still keeps such a local change queued and skips overwriting it on pull,
-  and reports it - so nothing is ever silently lost - but the normal path no
-  longer surfaces conflicts to the client. The remaining question is purely
-  app-level UX for those rare cases (what to *tell* the user), which can wait
-  for the client implementation details.
+- **Push rejection is now an HTTP error.** Since the hub branches + resolves
+  stale pushes, a rejected push is rare (a genuinely bogus `base_rev`, or a
+  hub mid-failure) and surfaces as a `409`/`502` on the whole `POST /changes`.
+  The engine treats that like any hub failure - failover, then notify - and
+  leaves the pending queue untouched, so nothing is ever silently lost. The
+  remaining question is purely app-level UX for those rare cases (what to
+  *tell* the user), which can wait for the client implementation details.
 - **WASM target.** `client-core` currently builds for native (reqwest +
   tokio). Compiling to `wasm32` will want the `reqwest` `js` feature and a
   `?Send`/single-threaded executor for the store/engine; noted, not done.

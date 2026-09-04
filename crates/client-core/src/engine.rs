@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
-use protocol_types::{ChangeEntry, PushChange, PushResult, PushStatus};
+use protocol_types::{ChangeEntry, PushChange};
 use thiserror::Error;
 
 use crate::hub::{FileContent, HubClient, HubError};
@@ -88,8 +88,6 @@ pub struct PushReport {
   /// Id of the hub that accepted this push.
   pub hub: String,
   pub pushed: usize,
-  /// Paths the hub rejected with `Conflict` (kept queued locally).
-  pub conflicts: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -258,39 +256,24 @@ impl SyncEngine {
       ..Default::default()
     };
 
-    let mut still_pending = Vec::new();
     for (change, result) in pending.iter().zip(&results) {
-      match result {
-        PushResult {
-          status: PushStatus::Ok { rev },
-          ..
-        } => {
-          // The hub now has our content. For an upsert, record the
-          // hub's new revision as the local base for next time; for
-          // a delete the local file is already gone.
-          if !change.deleted {
-            self.bump_rev(&change.path, rev).await?;
-          }
-          report.pushed += 1;
-        }
-        PushResult {
-          status: PushStatus::Conflict,
-          ..
-        } => {
-          // Keep the change queued - do not lose local work.
-          report.conflicts.push(change.path.clone());
-          still_pending.push(change.clone());
-        }
+      // The hub now has our content. For an upsert, record the hub's new
+      // revision as the local base for next time; for a delete the local
+      // file is already gone.
+      if !change.deleted {
+        self.bump_rev(&change.path, &result.rev).await?;
       }
+      report.pushed += 1;
     }
 
-    // Persist the queue with accepted entries removed (conflicted ones
-    // remain). If a hub returned fewer results than we sent, that's a
-    // protocol violation - keep everything queued to stay safe.
+    // Clear the queue only on a full, successful batch. If the hub returned
+    // fewer results than we sent, that's a protocol violation - keep
+    // everything queued to stay safe. (A rejected push surfaces as an HTTP
+    // error on `hub.push` above, which aborts before we get here.)
     if results.len() == changes.len() {
       self
         .meta
-        .put(KEY_PENDING, serde_json::to_vec(&still_pending).unwrap())
+        .put(KEY_PENDING, serde_json::to_vec(&Vec::<PendingChange>::new()).unwrap())
         .await?;
     }
 

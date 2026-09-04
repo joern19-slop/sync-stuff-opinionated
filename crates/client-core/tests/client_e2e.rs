@@ -139,13 +139,11 @@ async fn concurrent_edit_to_same_path_merges_cleanly() {
     .await
     .unwrap();
 
-  // Neither push is rejected as a conflict; the hub branches + merges.
+  // Neither push is rejected; the hub branches + merges.
   let ra = a.sync().await.unwrap();
   assert_eq!(ra.push.pushed, 1);
-  assert!(ra.push.conflicts.is_empty());
   let rb = b.sync().await.unwrap();
   assert_eq!(rb.push.pushed, 1);
-  assert!(rb.push.conflicts.is_empty());
 
   // Both converge to the diff3 merge of the two edits.
   a.sync().await.unwrap();
@@ -183,10 +181,8 @@ async fn concurrent_adjacent_edit_keeps_newer_and_converges() {
 
   let ra = a.sync().await.unwrap();
   assert_eq!(ra.push.pushed, 1);
-  assert!(ra.push.conflicts.is_empty());
   let rb = b.sync().await.unwrap();
   assert_eq!(rb.push.pushed, 1);
-  assert!(rb.push.conflicts.is_empty());
 
   // The newer edit (B2, mtime 3) wins; both devices converge to it.
   a.sync().await.unwrap();

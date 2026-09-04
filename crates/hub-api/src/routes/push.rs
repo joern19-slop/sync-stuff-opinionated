@@ -1,12 +1,13 @@
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::Json;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::json;
 use std::sync::Arc;
-use protocol_types::{PushChange, PushResult, PushStatus};
+use protocol_types::{PushChange, PushResult};
 
 use crate::couch::Revisions;
-use crate::error::CouchError;
+use crate::error::{ApiError, CouchError};
 
 use crate::resolver;
 use crate::state::AppState;
@@ -24,12 +25,12 @@ use crate::state::AppState;
 pub async fn post_changes(
   State(state): State<Arc<AppState>>,
   Json(pushes): Json<Vec<PushChange>>,
-) -> Json<Vec<PushResult>> {
+) -> Result<Json<Vec<PushResult>>, ApiError> {
   let mut results = Vec::with_capacity(pushes.len());
   for change in pushes {
-    results.push(apply_one(&state, change).await);
+    results.push(apply_one(&state, change).await?);
   }
-  Json(results)
+  Ok(Json(results))
 }
 
 enum ApplyError {
@@ -39,40 +40,40 @@ enum ApplyError {
 
 impl From<CouchError> for ApplyError {
   fn from(e: CouchError) -> Self {
-    match e {
-      CouchError::RevConflict(_) => ApplyError::Conflict,
-      other => ApplyError::Couch(other),
+    ApplyError::Couch(e)
+  }
+}
+
+impl ApplyError {
+  /// Maps an internal apply failure to the HTTP error the client sees. A
+  /// `Conflict` (bogus `base_rev`, blind delete) is the client's mistake, so
+  /// `409`; a CouchDB failure reuses the `From<CouchError>` mapping (409 for
+  /// a rev conflict, `502` for transport/backend problems).
+  fn into_api(self, path: &str) -> ApiError {
+    match self {
+      ApplyError::Conflict => ApiError(
+        StatusCode::CONFLICT,
+        format!("cannot apply change to {path}"),
+      ),
+      ApplyError::Couch(e) => {
+        tracing::error!(path, error = %e, "push failed");
+        e.into()
+      }
     }
   }
 }
 
-async fn apply_one(state: &AppState, change: PushChange) -> PushResult {
+async fn apply_one(state: &AppState, change: PushChange) -> Result<PushResult, ApiError> {
   let path = change.path.clone();
+  let rev = apply(state, &change).await.map_err(|e| e.into_api(&path))?;
+  Ok(PushResult { path, rev })
+}
 
-  let outcome = if change.deleted {
-    apply_delete(state, &change).await
+async fn apply(state: &AppState, change: &PushChange) -> Result<String, ApplyError> {
+  if change.deleted {
+    apply_delete(state, change).await
   } else {
-    apply_upsert(state, &change).await
-  };
-
-  match outcome {
-    Ok(rev) => PushResult {
-      path,
-      status: PushStatus::Ok { rev },
-    },
-    Err(ApplyError::Conflict) => PushResult {
-      path,
-      status: PushStatus::Conflict,
-    },
-    Err(ApplyError::Couch(e)) => {
-      // Surface as a conflict so the client re-pulls; operators get the
-      // real error from the hub's own logs.
-      tracing::error!(path = %change.path, error = %e, "push failed");
-      PushResult {
-        path,
-        status: PushStatus::Conflict,
-      }
-    }
+    apply_upsert(state, change).await
   }
 }
 
@@ -200,11 +201,7 @@ async fn branch_and_resolve(
     });
   }
 
-  state
-    .couch
-    .put_revision(doc)
-    .await
-    .map_err(ApplyError::from)?;
+  state.couch.put_revision(doc).await?;
 
   if let Err(e) = resolver::resolve(&state.couch, path).await {
     // The branch is still in the tree; the watcher (or the client's next
