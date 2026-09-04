@@ -227,9 +227,13 @@ hub's control).
   leaves the pending queue untouched, so nothing is ever silently lost. The
   remaining question is purely app-level UX for those rare cases (what to
   *tell* the user), which can wait for the client implementation details.
-- **WASM target.** `client-core` currently builds for native (reqwest +
-  tokio). Compiling to `wasm32` will want the `reqwest` `js` feature and a
-  `?Send`/single-threaded executor for the store/engine; noted, not done.
+- **WASM target (in progress).** `client-core` + `common` now compile to
+  `wasm32-unknown-unknown` (reqwest auto-uses `fetch` on wasm; `tokio` moved to
+  dev-deps; the request timeout is applied per-request since wasm
+  `ClientBuilder` has none). Remaining: the web `FileStore`/`MetaStore`
+  (OPFS/IndexedDB) and the wasm-bindgen façade, which will likely need
+  `?Send` on the store traits (the wasm futures aren't `Send`). See
+  `calendar/PLAN.md` Phase 1.
 - **Checkpoint identity.** A hub's checkpoint is keyed by its base URL, so a
   hub whose URL changes mid-life restarts from a full pull (safe, just
   slower). Fine at this scale.

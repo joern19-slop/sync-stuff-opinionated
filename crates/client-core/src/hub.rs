@@ -67,6 +67,7 @@ impl HubClient {
       .http
       .get(&url)
       .bearer_auth(&self.device_token)
+      .timeout(common::REQUEST_TIMEOUT)
       .send()
       .await?;
     Self::json_or_err(resp).await
@@ -110,6 +111,7 @@ impl HubClient {
       .http
       .get(&url)
       .bearer_auth(&self.device_token)
+      .timeout(common::REQUEST_TIMEOUT)
       .send()
       .await?;
 
@@ -144,6 +146,7 @@ impl HubClient {
       .http
       .post(&url)
       .bearer_auth(&self.device_token)
+      .timeout(common::REQUEST_TIMEOUT)
       .json(changes)
       .send()
       .await?;
