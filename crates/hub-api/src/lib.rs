@@ -21,43 +21,43 @@ use state::AppState;
 /// checker are spawned by `run()`, so HTTP-only tests can use this without
 /// inheriting a background thread that polls their mock CouchDB.
 pub async fn build_app(cfg: &Config) -> anyhow::Result<axum::Router> {
-    let couch = couch_client(cfg);
-    couch.ensure_db().await?;
+  let couch = couch_client(cfg);
+  couch.ensure_db().await?;
 
-    let state = Arc::new(AppState {
-        couch,
-        device_tokens: cfg.device_tokens.clone(),
-    });
+  let state = Arc::new(AppState {
+    couch,
+    device_tokens: cfg.device_tokens.clone(),
+  });
 
-    Ok(routes::build_router(state))
+  Ok(routes::build_router(state))
 }
 
 /// Canonical startup: build the app *and* spawn the Stage 3 background tasks
 /// (change watcher -> FCM, replication health -> Discord), then serve.
 pub async fn run(cfg: &Config) -> anyhow::Result<()> {
-    let couch = couch_client(cfg);
-    couch.ensure_db().await?;
+  let couch = couch_client(cfg);
+  couch.ensure_db().await?;
 
-    let state = Arc::new(AppState {
-        couch: couch.clone(),
-        device_tokens: cfg.device_tokens.clone(),
-    });
-    let app = routes::build_router(state);
+  let state = Arc::new(AppState {
+    couch: couch.clone(),
+    device_tokens: cfg.device_tokens.clone(),
+  });
+  let app = routes::build_router(state);
 
-    let _background = watcher::spawn(couch, cfg);
+  let _background = watcher::spawn(couch, cfg);
 
-    let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;
-    tracing::info!(addr = %cfg.bind_addr, "hub-api listening");
-    axum::serve(listener, app).await?;
+  let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;
+  tracing::info!(addr = %cfg.bind_addr, "hub-api listening");
+  axum::serve(listener, app).await?;
 
-    Ok(())
+  Ok(())
 }
 
 fn couch_client(cfg: &Config) -> CouchClient {
-    CouchClient::new(
-        &cfg.couch_url,
-        &cfg.couch_db,
-        &cfg.couch_user,
-        &cfg.couch_password,
-    )
+  CouchClient::new(
+    &cfg.couch_url,
+    &cfg.couch_db,
+    &cfg.couch_user,
+    &cfg.couch_password,
+  )
 }

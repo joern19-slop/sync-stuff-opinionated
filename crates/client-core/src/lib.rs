@@ -20,8 +20,8 @@ pub mod notify;
 pub mod store;
 
 pub use engine::{
-    checkpoint_key, file_key, FileMeta, PendingChange, PullReport, PushReport, SyncEngine,
-    SyncError, SyncReport, KEY_PENDING,
+  checkpoint_key, file_key, FileMeta, PendingChange, PullReport, PushReport, SyncEngine, SyncError,
+  SyncReport, KEY_PENDING,
 };
 pub use hub::{FileContent, HubClient, HubError};
 pub use notify::Notifier;

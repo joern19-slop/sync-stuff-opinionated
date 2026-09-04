@@ -12,7 +12,7 @@ use crate::engine::SyncError;
 /// Implemented by the client app (native / web / ...) to report sync problems
 /// to the user.
 pub trait Notifier: Send + Sync {
-    /// An unexpected error that should be surfaced to the user (a hub that's
-    /// unreachable after every fallback, a local store failure, ...).
-    fn notify_error(&self, error: &SyncError);
+  /// An unexpected error that should be surfaced to the user (a hub that's
+  /// unreachable after every fallback, a local store failure, ...).
+  fn notify_error(&self, error: &SyncError);
 }

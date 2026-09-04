@@ -1,8 +1,8 @@
 use axum::{
-    extract::{Request, State},
-    http::StatusCode,
-    middleware::Next,
-    response::Response,
+  extract::{Request, State},
+  http::StatusCode,
+  middleware::Next,
+  response::Response,
 };
 use std::sync::Arc;
 
@@ -13,18 +13,18 @@ use crate::state::AppState;
 /// Intentionally simple for this stage - see `Config::device_tokens` for
 /// the provisioning model.
 pub async fn require_device_token(
-    State(state): State<Arc<AppState>>,
-    req: Request,
-    next: Next,
+  State(state): State<Arc<AppState>>,
+  req: Request,
+  next: Next,
 ) -> Result<Response, StatusCode> {
-    let token = req
-        .headers()
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+  let token = req
+    .headers()
+    .get(axum::http::header::AUTHORIZATION)
+    .and_then(|v| v.to_str().ok())
+    .and_then(|v| v.strip_prefix("Bearer "));
 
-    match token {
-        Some(t) if state.device_tokens.contains(t) => Ok(next.run(req).await),
-        _ => Err(StatusCode::UNAUTHORIZED),
-    }
+  match token {
+    Some(t) if state.device_tokens.contains(t) => Ok(next.run(req).await),
+    _ => Err(StatusCode::UNAUTHORIZED),
+  }
 }

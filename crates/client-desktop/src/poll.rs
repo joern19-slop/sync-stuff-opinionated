@@ -18,34 +18,38 @@ use tracing::{debug, warn};
 const LONGPOLL_TIMEOUT_SECS: u64 = 25;
 
 pub fn spawn(engine: Arc<SyncEngine>, hub: HubClient, wake: UnboundedSender<()>) {
-    tokio::spawn(async move {
-        let mut since = match engine.checkpoint(hub.id()).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(hub = hub.id(), error = %e, "reading checkpoint for long-poll failed");
-                None
-            }
-        };
-        let mut backoff = Duration::from_secs(1);
+  tokio::spawn(async move {
+    let mut since = match engine.checkpoint(hub.id()).await {
+      Ok(s) => s,
+      Err(e) => {
+        warn!(hub = hub.id(), error = %e, "reading checkpoint for long-poll failed");
+        None
+      }
+    };
+    let mut backoff = Duration::from_secs(1);
 
-        loop {
-            match hub.longpoll(since.as_deref(), LONGPOLL_TIMEOUT_SECS).await {
-                Ok(resp) => {
-                    backoff = Duration::from_secs(1);
-                    since = Some(resp.checkpoint);
-                    if !resp.changes.is_empty() {
-                        debug!(hub = hub.id(), n = resp.changes.len(), "remote changes arrived");
-                        if wake.send(()).is_err() {
-                            break; // main loop is gone
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!(hub = hub.id(), error = %e, "long-poll failed");
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(Duration::from_secs(30));
-                }
+    loop {
+      match hub.longpoll(since.as_deref(), LONGPOLL_TIMEOUT_SECS).await {
+        Ok(resp) => {
+          backoff = Duration::from_secs(1);
+          since = Some(resp.checkpoint);
+          if !resp.changes.is_empty() {
+            debug!(
+              hub = hub.id(),
+              n = resp.changes.len(),
+              "remote changes arrived"
+            );
+            if wake.send(()).is_err() {
+              break; // main loop is gone
             }
+          }
         }
-    });
+        Err(e) => {
+          warn!(hub = hub.id(), error = %e, "long-poll failed");
+          tokio::time::sleep(backoff).await;
+          backoff = (backoff * 2).min(Duration::from_secs(30));
+        }
+      }
+    }
+  });
 }

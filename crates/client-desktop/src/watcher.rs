@@ -13,86 +13,85 @@ use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use tokio::sync::mpsc::UnboundedSender;
 
 const WATCH_MASK: WatchMask = WatchMask::CREATE
-    .union(WatchMask::DELETE)
-    .union(WatchMask::MODIFY)
-    .union(WatchMask::CLOSE_WRITE)
-    .union(WatchMask::MOVED_FROM)
-    .union(WatchMask::MOVED_TO)
-    .union(WatchMask::ATTRIB);
+  .union(WatchMask::DELETE)
+  .union(WatchMask::MODIFY)
+  .union(WatchMask::CLOSE_WRITE)
+  .union(WatchMask::MOVED_FROM)
+  .union(WatchMask::MOVED_TO)
+  .union(WatchMask::ATTRIB);
 
 /// Spawns a background thread that watches `root` recursively and sends `()`
 /// on `changed` whenever anything under it changes.
 pub fn spawn(root: PathBuf, changed: UnboundedSender<()>) -> std::io::Result<()> {
-    std::thread::Builder::new()
-        .name("inotify".to_string())
-        .spawn(move || run(root, changed))?;
-    Ok(())
+  std::thread::Builder::new()
+    .name("inotify".to_string())
+    .spawn(move || run(root, changed))?;
+  Ok(())
 }
 
 fn run(root: PathBuf, changed: UnboundedSender<()>) {
-    let mut inotify = match Inotify::init() {
-        Ok(i) => i,
-        Err(e) => {
-            tracing::error!(error = %e, "inotify init failed");
-            return;
-        }
+  let mut inotify = match Inotify::init() {
+    Ok(i) => i,
+    Err(e) => {
+      tracing::error!(error = %e, "inotify init failed");
+      return;
+    }
+  };
+
+  let mut dirs: HashMap<WatchDescriptor, PathBuf> = HashMap::new();
+  watch_tree(&mut inotify, &mut dirs, &root);
+
+  let mut buf = [0u8; 4096];
+  loop {
+    let events = match inotify.read_events_blocking(&mut buf) {
+      Ok(e) => e,
+      Err(e) => {
+        tracing::error!(error = %e, "inotify read failed");
+        return;
+      }
     };
 
-    let mut dirs: HashMap<WatchDescriptor, PathBuf> = HashMap::new();
-    watch_tree(&mut inotify, &mut dirs, &root);
+    for event in events {
+      if event.mask.contains(EventMask::IGNORED) {
+        continue;
+      }
 
-    let mut buf = [0u8; 4096];
-    loop {
-        let events = match inotify.read_events_blocking(&mut buf) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::error!(error = %e, "inotify read failed");
-                return;
-            }
-        };
+      let Some(dir) = dirs.get(&event.wd).cloned() else {
+        continue;
+      };
 
-        for event in events {
-            if event.mask.contains(EventMask::IGNORED) {
-                continue;
-            }
+      let Some(name) = event.name else {
+        // Event on the watched directory itself (e.g. it was removed).
+        let _ = changed.send(());
+        continue;
+      };
 
-            let Some(dir) = dirs.get(&event.wd).cloned() else {
-                continue;
-            };
+      let full = dir.join(name);
+      let is_dir = event.mask.contains(EventMask::ISDIR);
 
-            let Some(name) = event.name else {
-                // Event on the watched directory itself (e.g. it was removed).
-                let _ = changed.send(());
-                continue;
-            };
+      if is_dir
+        && (event.mask.contains(EventMask::CREATE) || event.mask.contains(EventMask::MOVED_TO))
+      {
+        // A new subdirectory appeared: watch it (and its children)
+        // so future changes inside it are seen.
+        watch_tree(&mut inotify, &mut dirs, &full);
+      }
 
-            let full = dir.join(name);
-            let is_dir = event.mask.contains(EventMask::ISDIR);
-
-            if is_dir
-                && (event.mask.contains(EventMask::CREATE)
-                    || event.mask.contains(EventMask::MOVED_TO))
-            {
-                // A new subdirectory appeared: watch it (and its children)
-                // so future changes inside it are seen.
-                watch_tree(&mut inotify, &mut dirs, &full);
-            }
-
-            let _ = changed.send(());
-        }
+      let _ = changed.send(());
     }
+  }
 }
 
 fn watch_tree(inotify: &mut Inotify, dirs: &mut HashMap<WatchDescriptor, PathBuf>, root: &Path) {
-    if let Ok(wd) = inotify.watches().add(root, WATCH_MASK) {
-        dirs.insert(wd, root.to_path_buf());
+  if let Ok(wd) = inotify.watches().add(root, WATCH_MASK) {
+    dirs.insert(wd, root.to_path_buf());
+  }
+  if let Ok(entries) = std::fs::read_dir(root) {
+    for entry in entries.flatten() {
+      let path = entry.path();
+      if path.is_dir() {
+        watch_tree(inotify, dirs, &path);
+      }
     }
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                watch_tree(inotify, dirs, &path);
-            }
-        }
-    }
+  }
 }

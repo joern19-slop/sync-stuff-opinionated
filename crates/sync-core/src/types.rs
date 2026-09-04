@@ -16,31 +16,31 @@ pub type Checkpoint = String;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChangeEntry {
-    pub path: String,
-    pub deleted: bool,
-    /// Opaque revision tag for this path's current state. Used by the
-    /// client as `base_rev` on a subsequent `POST /changes` for that path.
-    pub rev: String,
+  pub path: String,
+  pub deleted: bool,
+  /// Opaque revision tag for this path's current state. Used by the
+  /// client as `base_rev` on a subsequent `POST /changes` for that path.
+  pub rev: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangesResponse {
-    pub changes: Vec<ChangeEntry>,
-    pub checkpoint: Checkpoint,
+  pub changes: Vec<ChangeEntry>,
+  pub checkpoint: Checkpoint,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetadata {
-    pub path: String,
-    pub rev: String,
-    pub content_type: String,
-    pub size: u64,
-    /// Unix seconds. Client-supplied on push, echoed back on read - the hub
-    /// does not trust wall-clock time from itself for this field so that
-    /// conflict resolution's "keep the newer file by mtime" rule (see the
-    /// architecture doc) is driven by the client's view of edit time, not
-    /// upload time.
-    pub mtime: i64,
+  pub path: String,
+  pub rev: String,
+  pub content_type: String,
+  pub size: u64,
+  /// Unix seconds. Client-supplied on push, echoed back on read - the hub
+  /// does not trust wall-clock time from itself for this field so that
+  /// conflict resolution's "keep the newer file by mtime" rule (see the
+  /// architecture doc) is driven by the client's view of edit time, not
+  /// upload time.
+  pub mtime: i64,
 }
 
 /// One local change a client wants to push. `base_rev` is the revision the
@@ -48,32 +48,32 @@ pub struct FileMetadata {
 /// path doesn't exist on the hub yet, e.g. a brand new file).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushChange {
-    pub path: String,
-    pub deleted: bool,
-    pub base_rev: Option<String>,
-    pub mtime: i64,
-    /// Present unless `deleted` is true.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_base64: Option<String>,
+  pub path: String,
+  pub deleted: bool,
+  pub base_rev: Option<String>,
+  pub mtime: i64,
+  /// Present unless `deleted` is true.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub content_type: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub content_base64: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PushStatus {
-    /// Write applied. `rev` is the new current revision for this path.
-    Ok { rev: String },
-    /// `base_rev` was stale - someone else changed this path first. No
-    /// merge logic exists yet at this stage (see Stage 5 in the build
-    /// order); the client should just re-pull via `/changes` and decide
-    /// whether to retry.
-    Conflict,
+  /// Write applied. `rev` is the new current revision for this path.
+  Ok { rev: String },
+  /// `base_rev` was stale - someone else changed this path first. No
+  /// merge logic exists yet at this stage (see Stage 5 in the build
+  /// order); the client should just re-pull via `/changes` and decide
+  /// whether to retry.
+  Conflict,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushResult {
-    pub path: String,
-    #[serde(flatten)]
-    pub status: PushStatus,
+  pub path: String,
+  #[serde(flatten)]
+  pub status: PushStatus,
 }
