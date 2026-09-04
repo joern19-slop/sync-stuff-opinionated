@@ -107,6 +107,93 @@ three Tuta-side blockers from the notes map to:
 - Implement the plaintext `EntityRestInterface` in TS calling the WASM façade.
 - Swap auth and shim the websocket sync (poll → `onEntityUpdatesReceived`).
 
+#### Phase 3 reconnaissance (done, against upstream `tutanota` @ master)
+
+The seam is real but **deeper than the notes implied**:
+
+- `EntityRestInterface` — `src/platform-kit/network/EntityRestCacheInterface.ts`:
+  9 methods (`load`, `loadRange`, `loadMultiple`, `setup`, `setupMultiple`,
+  `update`, `erase`, `eraseMultiple`, `onEntityUpdatesReceived`), plus the
+  `EntityRestCache` extension (7 more: `purgeStorage`, `recordSyncTime`,
+  `timeSinceLastSyncMs`, `isOutOfSync`, `deleteFromCacheIfExists`,
+  `updateCacheWithMissedEntityUpdates`, `setCacheSyncStatus`).
+- Instantiated as `new DefaultEntityRestCache(entityRestClient,
+  maybeUninitializedStorage, typeModelResolver, patchMerger, lastProcessed)` in
+  `src/applications/calendar-app/workerUtils/index/CalendarWorkerLocator.ts:225`,
+  then handed to `EntityClient` on the main thread (`calendarLocator.ts:639`)
+  via the worker.
+- The production chain is `DefaultEntityRestCache → EntityRestClient →
+  InstancePipeline (crypto) → RestClient (HTTP)`; the worker also owns login
+  (`LoginController`/`LoginFacade`/`CredentialsProvider`/2FA/Webauthn) and the
+  websocket `EventController` that pushes entity updates.
+- The calendar UI is coupled to mail (`MailboxModel`) and contacts
+  (`ContactModel`) through the shared locator, so an in-place swap must shim
+  login + the websocket + a dozen facades, not just `EntityRestInterface`.
+
+**Toolchain**: `package.json` requires Node `>=24.17.0`; `bun 1.4.0` reports
+node `26.3.0`, so the version gate is satisfiable, but the repo ships
+`package-lock.json` (npm). Per "never use two systems", use `bun` consistently.
+
+**Build (assessed, not yet green).** `bun install` works after two fixes: the
+`workspaces: ["./src/licc"]` entry is stale (delete it) and `package-lock.json`
+must go (bun can't verify npm's integrity hashes for the git deps) → bun
+generates `bun.lockb`. The `@tutao/*` "packages" are not npm packages — they're
+`src/` dirs wired via tsconfig `paths`. The build is a heavy custom pipeline:
+`git submodule update --init` (argon2, liboqs, Signal-FTS5), C→wasm (`make`
+liboqs/argon2), the crypto Rust/WASM (`buildWasm.js` + `wasm-pack`), rollup
+(`buildWebapp.js`), plus native `sqlcipher` and `electron`. A one-shot
+`calendar:types` fails (TS6305) because it needs the full incremental build.
+
+**Strategic note**: the bulk of that native/WASM build is *crypto*
+(argon2/liboqs/InstancePipeline), which the plaintext swap removes. So a full
+"unmodified baseline build" is expensive for code we're about to delete; the
+leaner path is to swap first (stub the backend, drop crypto) and then build.
+
+**Transitive closure (mapped).** The 57 calendar view/model/gui/export files
+transitively import **1103 source files**:
+
+| bucket | files |
+|---|---|
+| `common` (mail/contacts/api/worker) | 411 |
+| `ui` (the UI kit) | 204 |
+| `platform-kit` | 180 |
+| `mail-app` | 146 |
+| `calendar-app` | 62 |
+| `app-kit` | 42 |
+| `entities` | 21 |
+| other apps | 18 |
+| `common/calendar` | 18 |
+
+Plus the whole `@tutao/*` library surface (`entities`, `app-env`, `utils`,
+`meta`, `native-bridge`, `crypto`, `rest-client`, `instance-pipeline`).
+
+**Consequence**: the calendar is *not* cleanly separable — it depends on mail
+(`MailboxModel` for the user's calendar group, `SendMailModel` for invites) and
+contacts (attendees) transitively (146 `mail-app` + most of the 411 `common`
+files). So "extract the calendar" ≈ "keep the whole app". Realistic options:
+- **swap in place** (fork monorepo, replace `restInterface`/`DefaultEntityRestCache`
+  + shim login + websocket), keeping the mail/contacts coupling — matches
+  "don't rewrite things".
+- **rewrite a minimal single-user calendar** (strip attendees/invites UI) — a
+  rewrite, out of scope per "don't rewrite".
+
+**Direction (decided): extract, then delete the rest.**
+
+- `EntityRestInterface` alone is **not** the whole seam: login is orthogonal to
+  it. The calendar app boots through `LoginController`/`PostLoginActions` and
+  19 of 73 `calendar-app` files read `logins.getUserController()` (timezone,
+  mail addresses, calendar group id). So overwriting `restInterface` still
+  leaves login + a user session to satisfy. Extraction deletes login and
+  provides a minimal user stub instead of shimming it.
+- The websocket (`EventController`) is Tuta's server→client *push*; we don't
+  need it — our backend is long-poll. Delete it and drive entity updates from
+  the `WebSync` long-poll → re-read `.ics` → emit updates.
+- Sizes: `calendar-app` ~24k LOC (73 files), `common/calendar` ~5.7k LOC, the
+  UI proper (`calendar/view`) is 19 files. Extraction = pull the view/model
+  layer + its minimal `platform-kit`/`ui` closure into a small Mithril host.
+- **Rebasing against upstream is deferred** to the end (the extraction will
+  diverge; figure out the reconcile strategy then).
+
 ### Phase 4 — entity ↔ `.ics` translation
 - Implement the mapping table above; UID ↔ element-id resolution.
 - Calendar collection metadata files.

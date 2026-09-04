@@ -1,0 +1,3 @@
+[submodule "third_party/tutanota"]
+	path = third_party/tutanota
+	url = https://github.com/tutao/tutanota.git
