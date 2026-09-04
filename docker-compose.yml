@@ -16,7 +16,7 @@
 
 services:
   node-a:
-    image: couchdb:3.3
+    image: docker.io/library/couchdb:3.5
     environment:
       COUCHDB_USER: hub
       COUCHDB_PASSWORD: hub-password
@@ -26,7 +26,7 @@ services:
       - node-a-data:/opt/couchdb/data
 
   node-b:
-    image: couchdb:3.3
+    image: docker.io/library/couchdb:3.5
     environment:
       COUCHDB_USER: hub
       COUCHDB_PASSWORD: hub-password
