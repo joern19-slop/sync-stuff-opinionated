@@ -8,8 +8,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use client_core::{BlobStore, HubClient, MemStore, SyncEngine};
+use client_core::{HubClient, MemStore, SyncEngine};
 use hub_api::config::Config;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -62,21 +61,20 @@ async fn start_hub() -> (String, ContainerAsync<GenericImage>) {
     (format!("http://{addr}"), couch)
 }
 
-fn engine_with(hub_urls: Vec<String>, store: Arc<dyn BlobStore>) -> SyncEngine {
+fn engine_with(hub_urls: Vec<String>, mem: MemStore) -> SyncEngine {
     let hubs = hub_urls
         .into_iter()
         .map(|u| HubClient::new(u, DEVICE_TOKEN))
         .collect();
-    SyncEngine::new(hubs, store)
+    SyncEngine::new(hubs, Arc::new(mem.clone()), Arc::new(mem))
 }
 
 fn engine(hub_urls: Vec<String>) -> SyncEngine {
-    engine_with(hub_urls, Arc::new(MemStore::default()))
+    engine_with(hub_urls, MemStore::default())
 }
 
 async fn read_content(e: &SyncEngine, path: &str) -> Option<Vec<u8>> {
-    let stored = e.read_file(path).await.unwrap()?;
-    STANDARD.decode(stored.content_base64).ok()
+    e.read_file(path).await.unwrap()
 }
 
 #[tokio::test]
@@ -269,9 +267,9 @@ async fn paths_with_spaces_roundtrip() {
 #[ignore = "requires Docker; run with --ignored"]
 async fn checkpoint_persists_across_engine_restart() {
     let (hub_url, _couch) = start_hub().await;
-    let store: Arc<dyn BlobStore> = Arc::new(MemStore::default());
+    let mem = MemStore::default();
 
-    let a = engine_with(vec![hub_url.clone()], store.clone());
+    let a = engine_with(vec![hub_url.clone()], mem.clone());
     a.record_upsert("a.txt", 1, "text/plain", b"hello")
         .await
         .unwrap();
@@ -279,7 +277,7 @@ async fn checkpoint_persists_across_engine_restart() {
 
     // "Restart": a brand-new engine over the same durable store must not
     // re-pull what it already checkpointed.
-    let b = engine_with(vec![hub_url], store);
+    let b = engine_with(vec![hub_url], mem);
     let report = b.sync().await.unwrap();
     assert_eq!(report.pull.pulled, 0);
     assert_eq!(read_content(&b, "a.txt").await, Some(b"hello".to_vec()));

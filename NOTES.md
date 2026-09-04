@@ -101,8 +101,60 @@ hub's control).
   helper had to hold it until the test body finishes.
 - `localhost` -> `127.0.0.1` (podman's IPv6 port-forwarding drops bodies).
 
+## First client: desktop (inotify)
+
+- New crate `crates/client-desktop`: a headless CLI daemon that watches one
+  directory with inotify and syncs it to the hub(s), configured entirely by
+  env vars (`FILESYNC_HUBS` / `FILESYNC_TOKEN` / `FILESYNC_DIR`, plus optional
+  `FILESYNC_STATE_DIR` and `FILESYNC_DEBOUNCE_MS`).
+- **Storage split (per your decision).** `BlobStore` was replaced by two
+  traits in `client-core`: `MetaStore` (checkpoints, the pending queue, and
+  per-file `rev`/`mtime`/`content_type` metadata - the old `StoredFile` minus
+  its base64 content, now `FileMeta`) and `FileStore` (the actual file bytes,
+  keyed by path, with `put(path, bytes, mtime)`). The engine reads push
+  content from the `FileStore` instead of decoding base64 out of metadata.
+  - Desktop: `FsMetaStore` writes one URL-encoded-key file per key under the
+    XDG state dir; `FsFileStore` is the sync directory itself, writing
+    atomically and setting the on-disk mtime to the sync mtime.
+  - `MemStore` implements both for tests.
+- **Reconciliation, not event mapping.** The inotify watcher only signals
+  "something changed" (and keeps watches current for new subdirectories). On
+  startup and after each debounced signal, the client scans the tree and
+  compares each file's mtime against metadata: new/changed files are
+  `record_upsert`, known-but-gone paths are `record_delete`, then `sync()`.
+  Because pulls write files back with the same mtime they stored, the client's
+  own writes don't show up as new edits on the next pass - the loop is
+  idempotent without a suppression set.
+  - Engine gained `read_file` (raw bytes), `read_file_meta`, and
+    `list_file_paths` to support this; `MetaStore` gained `list_keys`.
+- **Known limitation:** change detection is mtime-at-second granularity, so an
+  edit that lands within the same second as the last sync (or a tool that
+  restores mtime) can be missed while the client is off. Matches the hub's
+  second-resolution "keep newer" rule; can be hardened with size/hash later.
+
+## Hub -> client wake (desktop): long-poll
+
+- FCM is mobile-only, so the desktop client can't use the hub's Stage 3
+  wakeup. Instead the hub exposes `GET /changes/longpoll?since=&timeout=`, a
+  separate endpoint that forwards CouchDB's native `feed=longpoll`: CouchDB
+  holds the request up to `timeout` (capped at 60s, default 25s) and returns
+  immediately when a change lands. `GET /changes` stays a pure snapshot.
+- The client spawns one long-poll task per hub (`client-desktop/src/poll.rs`).
+  Each keeps its own `since` (a wake-detection checkpoint, advanced from every
+  response) and signals the shared debounced reconcile/sync loop on any
+  non-empty batch; on error it retries with exponential backoff. The engine's
+  pull checkpoint is untouched until it actually pulls (`SyncEngine::checkpoint`
+  was added to read it).
+- This gives sub-second remote-change latency with ~one held connection per
+  hub, and no idle polling. WebSocket/SSE was considered and skipped as
+  overkill for 2-3 devices.
+
 ## Still open
 
+- **Web + mobile targets.** The desktop client proves out the native
+  `MetaStore`/`FileStore` backings. Web still needs OPFS/IndexedDB backings,
+  and mobile needs the FCM-wake / foreground-open / charging-started trigger
+  wiring (the core exposes `SyncEngine::sync()`; only the trigger differs).
 - **Client conflict-safety is now a fallback only.** Since the hub branches +
   resolves stale pushes, a client's `Conflict` result is rare (a genuinely
   unresolvable or bogus `base_rev`, or a hub that's mid-failure). The engine
@@ -111,10 +163,6 @@ hub's control).
   longer surfaces conflicts to the client. The remaining question is purely
   app-level UX for those rare cases (what to *tell* the user), which can wait
   for the client implementation details.
-- **Per-platform `BlobStore` backings** (native FS, web OPFS/IndexedDB), a
-  concrete `Notifier` implementation, and the FCM-wake / foreground-open /
-  charging-started trigger wiring - the core exposes `SyncEngine::sync()`,
-  the `BlobStore` trait, and the `Notifier` trait; the platform glue is next.
 - **WASM target.** `client-core` currently builds for native (reqwest +
   tokio). Compiling to `wasm32` will want the `reqwest` `js` feature and a
   `?Send`/single-threaded executor for the store/engine; noted, not done.
@@ -129,6 +177,6 @@ hub's control).
 
 ## Next
 
-Stage 4/7 are in place and tested; the remaining work is platform-specific
-(client targets) and is blocked on the implementation details you said will
-follow.
+Stages 4/7 are in place and tested, and the first concrete client (desktop,
+inotify) is shipped. Remaining platform work: web (OPFS/IndexedDB backings +
+WASM) and mobile (FCM-wake / foreground / charge triggers).

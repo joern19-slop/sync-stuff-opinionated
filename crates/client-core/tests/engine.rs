@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use client_core::{
-    checkpoint_key, file_key, BlobStore, HubClient, MemStore, Notifier, StoreError, SyncEngine,
-    SyncError,
+    checkpoint_key, file_key, FileMeta, FileStore, HubClient, MemStore, MetaStore, Notifier,
+    StoreError, SyncEngine, SyncError,
 };
 use serde_json::json;
 use wiremock::matchers::{bearer_token, method, path, query_param, query_param_is_missing};
@@ -37,16 +37,20 @@ impl CapturingNotifier {
     }
 }
 
-fn engine(server: &MockServer, store: Arc<dyn BlobStore>) -> SyncEngine {
-    SyncEngine::new(vec![hub_client(server)], store)
+fn engine(
+    server: &MockServer,
+    meta: Arc<dyn MetaStore>,
+    files: Arc<dyn FileStore>,
+) -> SyncEngine {
+    SyncEngine::new(vec![hub_client(server)], meta, files)
 }
 
 /// Returns a `MemStore` plus a `SyncEngine` sharing the same storage, so a
 /// test can assert on the store directly while the engine owns the trait
-/// object.
+/// objects.
 fn engine_with_mem(server: &MockServer) -> (MemStore, SyncEngine) {
     let mem = MemStore::default();
-    let engine = engine(server, Arc::new(mem.clone()));
+    let engine = engine(server, Arc::new(mem.clone()), Arc::new(mem.clone()));
     (mem, engine)
 }
 
@@ -96,14 +100,15 @@ async fn pull_writes_batch_and_advances_checkpoint() {
     assert_eq!(report.pulled, 2);
     assert_eq!(report.checkpoint.as_deref(), Some("cp-1"));
     assert_eq!(
-        mem.get(&checkpoint_key(&server.uri()))
+        MetaStore::get(&mem, &checkpoint_key(&server.uri()))
             .await
             .unwrap()
             .unwrap(),
         b"cp-1"
     );
-    assert!(mem.get(&file_key("a.txt")).await.unwrap().is_some());
-    assert!(mem.get(&file_key("b.txt")).await.unwrap().is_some());
+    assert!(MetaStore::get(&mem, &file_key("a.txt")).await.unwrap().is_some());
+    assert!(MetaStore::get(&mem, &file_key("b.txt")).await.unwrap().is_some());
+    assert_eq!(FileStore::get(&mem, "a.txt").await.unwrap(), Some(b"A".to_vec()));
 }
 
 #[tokio::test]
@@ -145,7 +150,7 @@ async fn incremental_pull_uses_stored_checkpoint() {
     assert_eq!(report.pulled, 1); // only b.txt this time
     assert_eq!(report.checkpoint.as_deref(), Some("cp-2"));
     assert_eq!(
-        mem.get(&checkpoint_key(&server.uri()))
+        MetaStore::get(&mem, &checkpoint_key(&server.uri()))
             .await
             .unwrap()
             .unwrap(),
@@ -153,29 +158,33 @@ async fn incremental_pull_uses_stored_checkpoint() {
     );
 }
 
-/// A store that fails the first `put` of a chosen key, simulating a crash
-/// mid-batch.
-struct FailOnceStore {
+/// A `MetaStore` wrapper that fails the first `put` of a chosen key,
+/// simulating a crash mid-batch.
+struct FailOnceMetaStore {
     inner: MemStore,
     fail_key: String,
     failed: AtomicBool,
 }
 
 #[async_trait]
-impl BlobStore for FailOnceStore {
+impl MetaStore for FailOnceMetaStore {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        self.inner.get(key).await
+        MetaStore::get(&self.inner, key).await
     }
 
     async fn put(&self, key: &str, value: Vec<u8>) -> Result<(), StoreError> {
         if key == self.fail_key && !self.failed.swap(true, Ordering::SeqCst) {
             return Err(StoreError::Io(format!("simulated crash writing {key}")));
         }
-        self.inner.put(key, value).await
+        MetaStore::put(&self.inner, key, value).await
     }
 
     async fn delete(&self, key: &str) -> Result<(), StoreError> {
-        self.inner.delete(key).await
+        MetaStore::delete(&self.inner, key).await
+    }
+
+    async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
+        MetaStore::list_keys(&self.inner, prefix).await
     }
 }
 
@@ -202,19 +211,18 @@ async fn checkpoint_is_not_advanced_when_batch_fails_partway() {
         .await;
 
     let mem = MemStore::default();
-    let store = FailOnceStore {
+    let meta = FailOnceMetaStore {
         inner: mem.clone(),
         fail_key: file_key("b.txt"),
         failed: AtomicBool::new(false),
     };
-    let engine = SyncEngine::new(vec![hub_client(&server)], Arc::new(store));
+    let engine = SyncEngine::new(vec![hub_client(&server)], Arc::new(meta), Arc::new(mem.clone()));
 
-    // First pull dies writing b.txt.
+    // First pull dies writing b.txt's metadata.
     assert!(engine.pull().await.is_err());
     // a.txt landed, but the checkpoint must not have advanced.
-    assert!(mem.get(&file_key("a.txt")).await.unwrap().is_some());
-    assert!(mem
-        .get(&checkpoint_key(&server.uri()))
+    assert!(MetaStore::get(&mem, &file_key("a.txt")).await.unwrap().is_some());
+    assert!(MetaStore::get(&mem, &checkpoint_key(&server.uri()))
         .await
         .unwrap()
         .is_none());
@@ -223,7 +231,7 @@ async fn checkpoint_is_not_advanced_when_batch_fails_partway() {
     let report = engine.pull().await.unwrap();
     assert_eq!(report.pulled, 2);
     assert_eq!(
-        mem.get(&checkpoint_key(&server.uri()))
+        MetaStore::get(&mem, &checkpoint_key(&server.uri()))
             .await
             .unwrap()
             .unwrap(),
@@ -256,9 +264,12 @@ async fn push_upsert_clears_pending_and_records_new_rev() {
     // Pending queue is now empty.
     assert!(engine.pending().await.unwrap().is_empty());
     // Local file kept its content but now points at the hub's new revision.
-    let stored: client_core::StoredFile =
-        serde_json::from_slice(&mem.get(&file_key("a.txt")).await.unwrap().unwrap()).unwrap();
-    assert_eq!(stored.rev, "2-b");
+    let meta: FileMeta = serde_json::from_slice(
+        &MetaStore::get(&mem, &file_key("a.txt")).await.unwrap().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(meta.rev, "2-b");
+    assert_eq!(FileStore::get(&mem, "a.txt").await.unwrap(), Some(b"hello".to_vec()));
 }
 
 #[tokio::test]
@@ -286,7 +297,8 @@ async fn push_conflict_keeps_local_change_queued() {
     let pending = engine.pending().await.unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].path, "a.txt");
-    assert!(mem.get(&file_key("a.txt")).await.unwrap().is_some());
+    assert!(MetaStore::get(&mem, &file_key("a.txt")).await.unwrap().is_some());
+    assert_eq!(FileStore::get(&mem, "a.txt").await.unwrap(), Some(b"hello".to_vec()));
 }
 
 #[tokio::test]
@@ -307,21 +319,31 @@ async fn delete_removes_local_file_and_pushes_a_delete() {
         .await
         .unwrap();
     engine.push().await.unwrap(); // get it to rev 2-b, clear pending
-    mem.put(
-        &file_key("a.txt"),
-        serde_json::to_vec(&json!({
-            "rev": "2-b", "mtime": 1, "content_type": "text/plain", "content_base64": "aGVsbG8="
-        }))
-        .unwrap(),
-    )
-    .await
-    .unwrap();
 
     engine.record_delete("a.txt", 2).await.unwrap();
-    assert!(mem.get(&file_key("a.txt")).await.unwrap().is_none());
+    assert!(MetaStore::get(&mem, &file_key("a.txt")).await.unwrap().is_none());
+    assert!(FileStore::get(&mem, "a.txt").await.unwrap().is_none());
 
     engine.push().await.unwrap();
     assert!(engine.pending().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn list_file_paths_lists_known_paths() {
+    let server = MockServer::start().await;
+    let (_mem, engine) = engine_with_mem(&server);
+    engine
+        .record_upsert("a.txt", 1, "text/plain", b"hi")
+        .await
+        .unwrap();
+    engine
+        .record_upsert("notes/b.txt", 2, "text/plain", b"there")
+        .await
+        .unwrap();
+
+    let mut paths = engine.list_file_paths().await.unwrap();
+    paths.sort();
+    assert_eq!(paths, vec!["a.txt", "notes/b.txt"]);
 }
 
 #[tokio::test]
@@ -342,9 +364,11 @@ async fn failover_tries_next_hub_when_first_is_unreachable() {
         .mount(&server)
         .await;
 
+    let mem = MemStore::default();
     let engine = SyncEngine::new(
         vec![dead, hub_client(&server)],
-        Arc::new(MemStore::default()),
+        Arc::new(mem.clone()),
+        Arc::new(mem),
     );
     engine
         .record_upsert("a.txt", 1, "text/plain", b"hi")
@@ -366,9 +390,11 @@ async fn notifier_receives_unexpected_errors() {
     };
 
     let notifier = Arc::new(CapturingNotifier::default());
+    let mem = MemStore::default();
     let engine = SyncEngine::new(
         vec![HubClient::new(format!("http://{dead_addr}"), "dev-token")],
-        Arc::new(MemStore::default()),
+        Arc::new(mem.clone()),
+        Arc::new(mem),
     )
     .with_notifier(notifier.clone());
 
@@ -408,12 +434,14 @@ async fn notifier_stays_silent_when_failover_recovers() {
         .await;
 
     let notifier = Arc::new(CapturingNotifier::default());
+    let mem = MemStore::default();
     let engine = SyncEngine::new(
         vec![
             HubClient::new(format!("http://{dead_addr}"), "dev-token"),
             hub_client(&server),
         ],
-        Arc::new(MemStore::default()),
+        Arc::new(mem.clone()),
+        Arc::new(mem),
     )
     .with_notifier(notifier.clone());
 

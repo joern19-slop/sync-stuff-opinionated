@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use hub_api::config::Config;
 use serde_json::json;
 use sync_core::ChangesResponse;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const DEVICE_TOKEN: &str = "test-token";
@@ -100,6 +100,40 @@ async fn get_changes_maps_couchdb_changes_feed_into_the_api_contract() {
         .changes
         .iter()
         .any(|c| c.path == "gone.txt" && c.deleted));
+}
+
+#[tokio::test]
+async fn get_changes_longpoll_forwards_feed_and_timeout_and_reshapes() {
+    let couch = MockServer::start().await;
+    let (hub_url, http) = start_hub_against(&couch).await;
+
+    Mock::given(method("GET"))
+        .and(path("/filesync/_changes"))
+        .and(query_param("feed", "longpoll"))
+        .and(query_param("timeout", "25"))
+        .and(query_param("since", "17-xyz"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [
+                { "id": "a.txt", "deleted": false, "changes": [{ "rev": "4-abc" }] },
+                { "id": "_design/foo", "deleted": false, "changes": [{ "rev": "1-x" }] }
+            ],
+            "last_seq": "18-xyz"
+        })))
+        .mount(&couch)
+        .await;
+
+    let resp = http
+        .get(format!("{hub_url}/changes/longpoll?since=17-xyz"))
+        .bearer_auth(DEVICE_TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+
+    let body: ChangesResponse = resp.json().await.unwrap();
+    assert_eq!(body.checkpoint, "18-xyz");
+    assert_eq!(body.changes.len(), 1);
+    assert_eq!(body.changes[0].path, "a.txt");
 }
 
 #[tokio::test]

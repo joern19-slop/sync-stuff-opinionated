@@ -13,6 +13,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/changes",
             get(changes::get_changes).post(push::post_changes),
         )
+        .route("/changes/longpoll", get(changes::get_changes_longpoll))
         .route("/file/*path", get(file::get_file))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

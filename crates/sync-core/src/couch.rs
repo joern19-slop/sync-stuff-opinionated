@@ -144,6 +144,27 @@ impl CouchClient {
         self.changes_inner(since, false).await
     }
 
+    /// Wraps `GET /{db}/_changes?feed=longpoll`: blocks up to `timeout_secs`
+    /// waiting for a change, returning immediately when one lands (or empty
+    /// results with the current `last_seq` when the timeout elapses).
+    pub async fn changes_longpoll(
+        &self,
+        since: Option<&str>,
+        timeout_secs: u64,
+    ) -> Result<RawChangesResponse, CouchError> {
+        let mut url = format!(
+            "{}/_changes?style=all_docs&feed=longpoll&timeout={}",
+            self.db_url(),
+            timeout_secs
+        );
+        if let Some(s) = since {
+            url.push_str("&since=");
+            url.push_str(&urlencoding::encode(s));
+        }
+        let resp = self.req(Method::GET, &url).send().await?;
+        Self::json_or_err(resp).await
+    }
+
     /// Like `changes`, but with `include_docs=true&conflicts=true` so each
     /// row carries the winning doc body (and `_conflicts` when present).
     /// Used by the conflict-detecting change watcher.
@@ -524,6 +545,30 @@ mod tests {
         assert_eq!(resp.results.len(), 1);
         assert_eq!(resp.results[0].id, "a.txt");
         assert_eq!(resp.last_seq, serde_json::json!("43-def"));
+    }
+
+    #[tokio::test]
+    async fn changes_longpoll_sends_feed_and_timeout() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/filesync/_changes"))
+            .and(query_param("feed", "longpoll"))
+            .and(query_param("timeout", "25"))
+            .and(query_param("since", "42-abc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [],
+                "last_seq": "42-abc"
+            })))
+            .mount(&server)
+            .await;
+
+        let resp = client(&server)
+            .await
+            .changes_longpoll(Some("42-abc"), 25)
+            .await
+            .unwrap();
+        assert!(resp.results.is_empty());
+        assert_eq!(resp.last_seq, serde_json::json!("42-abc"));
     }
 
     #[test]

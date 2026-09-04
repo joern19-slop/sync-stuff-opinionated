@@ -66,6 +66,31 @@ impl HubClient {
         Self::json_or_err(resp).await
     }
 
+    /// `GET /changes/longpoll` - blocks up to `timeout_secs` waiting for a
+    /// change, returning immediately when one lands (or empty on timeout).
+    /// The hub-side, FCM-free "wake" path for desktop clients.
+    pub async fn longpoll(
+        &self,
+        since: Option<&str>,
+        timeout_secs: u64,
+    ) -> Result<ChangesResponse, HubError> {
+        let mut url = format!(
+            "{}/changes/longpoll?timeout={timeout_secs}",
+            self.base_url.trim_end_matches('/')
+        );
+        if let Some(s) = since {
+            url.push_str("&since=");
+            url.push_str(&urlencoding::encode(s));
+        }
+        let resp = self
+            .http
+            .get(&url)
+            .bearer_auth(&self.device_token)
+            .send()
+            .await?;
+        Self::json_or_err(resp).await
+    }
+
     /// `GET /file/{path}`. `Ok(None)` when the hub has no such file (the
     /// path was deleted, or never existed).
     pub async fn get_file(&self, path: &str) -> Result<Option<FileContent>, HubError> {
@@ -185,6 +210,26 @@ mod tests {
             .await;
 
         let resp = client(&server).changes(Some("42-abc")).await.unwrap();
+        assert_eq!(resp.checkpoint, "43-def");
+        assert_eq!(resp.changes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn longpoll_sends_timeout_and_since() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/changes/longpoll"))
+            .and(query_param("timeout", "25"))
+            .and(query_param("since", "42-abc"))
+            .and(bearer_token("dev-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "changes": [{"path": "a.txt", "deleted": false, "rev": "1-x"}],
+                "checkpoint": "43-def"
+            })))
+            .mount(&server)
+            .await;
+
+        let resp = client(&server).longpoll(Some("42-abc"), 25).await.unwrap();
         assert_eq!(resp.checkpoint, "43-def");
         assert_eq!(resp.changes.len(), 1);
     }

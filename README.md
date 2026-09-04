@@ -15,12 +15,13 @@ Implementation of `ArchitecturePlan.md`. Build order progress:
   errors/staleness to a Discord webhook. See `crates/hub-api/src/watcher.rs`
   and `crates/hub-api/src/notify.rs`.
 - **Stage 4** - the client sync engine (`crates/client-core`): pulls hub
-  changes into a local `BlobStore` (advancing a durable checkpoint only after
-  a whole batch is written), pushes locally-recorded changes back, and never
-  drops a push the hub rejects. Two platform seams: `BlobStore` (native uses
-  the filesystem, web uses OPFS/IndexedDB; `MemStore` is the test reference)
-  and `Notifier` (the app implements it to surface unexpected errors to the
-  user).
+  changes into local storage (advancing a durable checkpoint only after a
+  whole batch is written), pushes locally-recorded changes back, and never
+  drops a push the hub rejects. Two platform seams, split by concern:
+  `MetaStore` (checkpoints, pending queue, per-file revision/mtime/content-type
+  metadata) and `FileStore` (the actual file bytes) - native uses the
+  filesystem, web uses OPFS/IndexedDB; `MemStore` is the test reference. A
+  third seam, `Notifier`, lets the app surface unexpected errors to the user.
 - **Stage 5** - hub-side conflict resolver: a conflicted doc (from
   replication, or from a client push whose `base_rev` was stale) is resolved
   with a diff3 three-way merge, written CAS-conditioned on the winning
@@ -37,9 +38,16 @@ Implementation of `ArchitecturePlan.md`. Build order progress:
   keyed per hub (CouchDB `seq` is node-local; revisions are consistent across
   replicas, so the push queue stays global).
 
-**Not implemented yet:** the per-platform `BlobStore` backings (native FS /
-web OPFS-IndexedDB) and the FCM-wake/foreground/charge trigger wiring - both
-deferred pending the concrete client targets. See `ArchitecturePlan.md`.
+**First client shipped:** `crates/client-desktop` - a headless CLI daemon that
+watches a directory with inotify and keeps it in sync with the hub. It
+implements `MetaStore` (XDG state dir) and `FileStore` (the sync dir), a
+concrete `Notifier` (logs to stderr), and an inotify watcher wired to
+reconciliation + sync on a debounce. See "Running the desktop client" below.
+
+**Not implemented yet:** the web `MetaStore`/`FileStore` backings
+(OPFS/IndexedDB), the WASM target, and the FCM-wake/foreground/charge trigger
+wiring for mobile - all deferred pending those concrete client targets. See
+`ArchitecturePlan.md`.
 
 ## Layout
 
@@ -47,7 +55,8 @@ deferred pending the concrete client targets. See `ArchitecturePlan.md`.
 Cargo.toml                 workspace
 crates/sync-core/          shared types, CouchDB client, diff3 merge
 crates/hub-api/             axum service: Hub Sync API + watcher/notifier/resolver
-crates/client-core/         client sync engine + BlobStore trait (Stage 4/7)
+crates/client-core/         client sync engine + MetaStore/FileStore traits (Stage 4/7)
+crates/client-desktop/      headless inotify client (the first concrete client)
 docker-compose.yml          two standalone CouchDB nodes (Stage 1)
 init-replication.sh         wires up bidirectional replication between them
 ```
@@ -86,7 +95,40 @@ curl -H 'Authorization: Bearer dev-token-1' -X POST localhost:8080/changes \
        "content_type":"text/plain","content_base64":"aGVsbG8="}]'
 
 curl -H 'Authorization: Bearer dev-token-1' localhost:8080/file/a.txt
+
+# long-poll: blocks up to 25s for a change, returns immediately when one lands
+curl -H 'Authorization: Bearer dev-token-1' 'localhost:8080/changes/longpoll?timeout=25'
 ```
+
+## Running the desktop client
+
+The client watches one directory with inotify and syncs it to the hub(s).
+Configure it with environment variables:
+
+```bash
+FILESYNC_HUBS=http://localhost:8080 \
+FILESYNC_TOKEN=dev-token-1 \
+FILESYNC_DIR=/home/you/filesync \
+cargo run -p client-desktop
+```
+
+| Var | Default | Meaning |
+|---|---|---|
+| `FILESYNC_HUBS` | *(required)* | comma-separated hub base URLs (ordered failover) |
+| `FILESYNC_TOKEN` | *(required)* | device bearer token |
+| `FILESYNC_DIR` | *(required)* | the directory to sync |
+| `FILESYNC_STATE_DIR` | `$XDG_STATE_HOME/filesync` | where sync metadata lives |
+| `FILESYNC_DEBOUNCE_MS` | `1000` | quiet period after the last change before syncing |
+
+On startup it reconciles the directory against the hub (picking up changes
+made while it was off), then watches recursively and re-syncs after each
+debounced change. Change detection is by mtime (seconds), consistent with the
+hub's conflict-resolution rule.
+
+Remote changes are picked up without a poll timer: the client holds a
+`GET /changes/longpoll` against each hub, which the hub blocks (via CouchDB's
+native `feed=longpoll`) until a change arrives, then returns immediately. That
+signal feeds the same debounced reconcile/sync loop as local inotify events.
 
 ## Tests
 

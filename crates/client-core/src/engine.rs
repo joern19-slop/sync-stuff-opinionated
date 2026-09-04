@@ -26,12 +26,12 @@ use thiserror::Error;
 
 use crate::hub::{FileContent, HubClient, HubError};
 use crate::notify::Notifier;
-use crate::store::{BlobStore, StoreError};
+use crate::store::{FileStore, MetaStore, StoreError};
 
 /// Key holding the serialized pending-push queue.
 pub const KEY_PENDING: &str = "pending";
 
-/// Key for a file's stored representation.
+/// Key for a file's stored metadata.
 pub fn file_key(path: &str) -> String {
     format!("file/{path}")
 }
@@ -49,18 +49,18 @@ pub enum SyncError {
     Hub(#[from] HubError),
 }
 
-/// A file as stored locally: content plus the metadata needed to push it
-/// back with a correct `base_rev`.
+/// Per-file metadata stored locally: the revision to use as `base_rev` on the
+/// next push, plus the mtime/content-type needed to push it back correctly.
+/// The content itself lives in the [`FileStore`], not here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredFile {
+pub struct FileMeta {
     pub rev: String,
     pub mtime: i64,
     pub content_type: String,
-    pub content_base64: String,
 }
 
 /// One local change waiting to be pushed. Content is *not* duplicated here -
-/// it lives in `file/{path}` and is read at push time.
+/// it lives in the [`FileStore`] and is read at push time.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingChange {
     pub path: String,
@@ -100,15 +100,21 @@ pub struct SyncReport {
 
 pub struct SyncEngine {
     hubs: Vec<HubClient>,
-    store: Arc<dyn BlobStore>,
+    meta: Arc<dyn MetaStore>,
+    files: Arc<dyn FileStore>,
     notifier: Option<Arc<dyn Notifier>>,
 }
 
 impl SyncEngine {
-    pub fn new(hubs: Vec<HubClient>, store: Arc<dyn BlobStore>) -> Self {
+    pub fn new(
+        hubs: Vec<HubClient>,
+        meta: Arc<dyn MetaStore>,
+        files: Arc<dyn FileStore>,
+    ) -> Self {
         Self {
             hubs,
-            store,
+            meta,
+            files,
             notifier: None,
         }
     }
@@ -155,7 +161,7 @@ impl SyncEngine {
     async fn pull_from(&self, hub: &HubClient) -> Result<PullReport, SyncError> {
         let ck_key = checkpoint_key(hub.id());
         let since = self
-            .store
+            .meta
             .get(&ck_key)
             .await?
             .and_then(|b| String::from_utf8(b).ok());
@@ -174,7 +180,7 @@ impl SyncEngine {
 
         // The batch is fully durable; only now is it safe to remember where
         // we got to. If this write fails, the batch just re-pulls next time.
-        self.store
+        self.meta
             .put(&ck_key, resp.checkpoint.into_bytes())
             .await?;
 
@@ -187,8 +193,6 @@ impl SyncEngine {
         entry: &ChangeEntry,
         report: &mut PullReport,
     ) -> Result<(), SyncError> {
-        let key = file_key(&entry.path);
-
         // A pending local change means we have unsynced local work for this
         // path; overwriting it with the remote version would lose it. Skip
         // and flag it for the caller instead.
@@ -198,7 +202,8 @@ impl SyncEngine {
         }
 
         if entry.deleted {
-            self.store.delete(&key).await?;
+            self.files.delete(&entry.path).await?;
+            self.meta.delete(&file_key(&entry.path)).await?;
             report.deleted += 1;
             return Ok(());
         }
@@ -210,7 +215,10 @@ impl SyncEngine {
             )))
         })?;
 
-        self.store.put(&key, encode_stored(&file)).await?;
+        self.files.put(&entry.path, file.content.clone(), file.mtime).await?;
+        self.meta
+            .put(&file_key(&entry.path), encode_meta(&file))
+            .await?;
         report.pulled += 1;
         Ok(())
     }
@@ -282,7 +290,7 @@ impl SyncEngine {
         // remain). If a hub returned fewer results than we sent, that's a
         // protocol violation - keep everything queued to stay safe.
         if results.len() == changes.len() {
-            self.store
+            self.meta
                 .put(KEY_PENDING, serde_json::to_vec(&still_pending).unwrap())
                 .await?;
         }
@@ -315,22 +323,20 @@ impl SyncEngine {
     ) -> Result<(), SyncError> {
         let key = file_key(path);
         let base_rev = self
-            .store
+            .meta
             .get(&key)
             .await?
-            .and_then(|b| serde_json::from_slice::<StoredFile>(&b).ok())
+            .and_then(|b| serde_json::from_slice::<FileMeta>(&b).ok())
             .map(|f| f.rev)
             .filter(|r| !r.is_empty());
 
-        let stored = StoredFile {
+        let meta = FileMeta {
             rev: base_rev.clone().unwrap_or_default(),
             mtime,
             content_type: content_type.to_string(),
-            content_base64: STANDARD.encode(content),
         };
-        self.store
-            .put(&key, serde_json::to_vec(&stored).unwrap())
-            .await?;
+        self.files.put(path, content.to_vec(), mtime).await?;
+        self.meta.put(&key, serde_json::to_vec(&meta).unwrap()).await?;
 
         self.upsert_pending(PendingChange {
             path: path.to_string(),
@@ -350,14 +356,15 @@ impl SyncEngine {
     async fn record_delete_inner(&self, path: &str, mtime: i64) -> Result<(), SyncError> {
         let key = file_key(path);
         let base_rev = self
-            .store
+            .meta
             .get(&key)
             .await?
-            .and_then(|b| serde_json::from_slice::<StoredFile>(&b).ok())
+            .and_then(|b| serde_json::from_slice::<FileMeta>(&b).ok())
             .map(|f| f.rev)
             .filter(|r| !r.is_empty());
 
-        self.store.delete(&key).await?;
+        self.files.delete(path).await?;
+        self.meta.delete(&key).await?;
 
         self.upsert_pending(PendingChange {
             path: path.to_string(),
@@ -369,12 +376,40 @@ impl SyncEngine {
         .await
     }
 
-    /// Reads a file back from the local store (raw content).
-    pub async fn read_file(&self, path: &str) -> Result<Option<StoredFile>, SyncError> {
-        let Some(bytes) = self.store.get(&file_key(path)).await? else {
+    /// Reads a file's raw content back from the file store.
+    pub async fn read_file(&self, path: &str) -> Result<Option<Vec<u8>>, SyncError> {
+        Ok(self.files.get(path).await?)
+    }
+
+    /// Reads a file's stored metadata (revision / mtime / content type).
+    pub async fn read_file_meta(&self, path: &str) -> Result<Option<FileMeta>, SyncError> {
+        let Some(bytes) = self.meta.get(&file_key(path)).await? else {
             return Ok(None);
         };
-        Ok(Some(serde_json::from_slice(&bytes).unwrap()))
+        Ok(serde_json::from_slice(&bytes).ok())
+    }
+
+    /// Reads a hub's current checkpoint, if any (used by a client that wants
+    /// to long-poll for changes without pulling them itself).
+    pub async fn checkpoint(&self, hub_id: &str) -> Result<Option<String>, SyncError> {
+        Ok(self
+            .meta
+            .get(&checkpoint_key(hub_id))
+            .await?
+            .and_then(|b| String::from_utf8(b).ok()))
+    }
+
+    /// Every path the engine currently has metadata for (i.e. every file it
+    /// believes exists locally). Used by a client to reconcile deletions that
+    /// happened while it was not running.
+    pub async fn list_file_paths(&self) -> Result<Vec<String>, SyncError> {
+        Ok(self
+            .meta
+            .list_keys("file/")
+            .await?
+            .into_iter()
+            .filter_map(|k| k.strip_prefix("file/").map(str::to_string))
+            .collect())
     }
 
     /// The currently-queued local changes (for observability/testing).
@@ -383,7 +418,7 @@ impl SyncEngine {
     }
 
     async fn load_pending(&self) -> Result<Vec<PendingChange>, SyncError> {
-        let Some(bytes) = self.store.get(KEY_PENDING).await? else {
+        let Some(bytes) = self.meta.get(KEY_PENDING).await? else {
             return Ok(Vec::new());
         };
         Ok(serde_json::from_slice(&bytes).unwrap_or_default())
@@ -397,7 +432,7 @@ impl SyncEngine {
         let mut pending = self.load_pending().await?;
         pending.retain(|p| p.path != change.path);
         pending.push(change);
-        self.store
+        self.meta
             .put(KEY_PENDING, serde_json::to_vec(&pending).unwrap())
             .await?;
         Ok(())
@@ -405,12 +440,12 @@ impl SyncEngine {
 
     async fn bump_rev(&self, path: &str, rev: &str) -> Result<(), SyncError> {
         let key = file_key(path);
-        let Some(bytes) = self.store.get(&key).await? else {
+        let Some(bytes) = self.meta.get(&key).await? else {
             return Ok(());
         };
-        let mut stored: StoredFile = serde_json::from_slice(&bytes).unwrap();
+        let mut stored: FileMeta = serde_json::from_slice(&bytes).unwrap();
         stored.rev = rev.to_string();
-        self.store
+        self.meta
             .put(&key, serde_json::to_vec(&stored).unwrap())
             .await?;
         Ok(())
@@ -425,27 +460,19 @@ impl SyncEngine {
             let (content_type, content_base64) = if p.deleted {
                 (None, None)
             } else {
-                let stored: StoredFile = self
-                    .store
+                let content = self.files.get(&p.path).await?.unwrap_or_default();
+                let meta = self
+                    .meta
                     .get(&file_key(&p.path))
                     .await?
-                    .and_then(|b| serde_json::from_slice(&b).ok())
-                    .unwrap_or_else(|| StoredFile {
-                        rev: String::new(),
-                        mtime: p.mtime,
-                        content_type: p.content_type.clone().unwrap_or_default(),
-                        content_base64: String::new(),
-                    });
-                (
-                    Some(if stored.content_type.is_empty() {
-                        p.content_type
-                            .clone()
-                            .unwrap_or_else(|| "application/octet-stream".to_string())
-                    } else {
-                        stored.content_type.clone()
-                    }),
-                    Some(stored.content_base64.clone()),
-                )
+                    .and_then(|b| serde_json::from_slice::<FileMeta>(&b).ok());
+                let content_type = meta
+                    .as_ref()
+                    .map(|m| m.content_type.clone())
+                    .filter(|c| !c.is_empty())
+                    .or_else(|| p.content_type.clone())
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                (Some(content_type), Some(STANDARD.encode(&content)))
             };
 
             out.push(PushChange {
@@ -486,12 +513,11 @@ impl SyncEngine {
     }
 }
 
-fn encode_stored(file: &FileContent) -> Vec<u8> {
-    serde_json::to_vec(&StoredFile {
+fn encode_meta(file: &FileContent) -> Vec<u8> {
+    serde_json::to_vec(&FileMeta {
         rev: file.rev.clone(),
         mtime: file.mtime,
         content_type: file.content_type.clone(),
-        content_base64: STANDARD.encode(&file.content),
     })
     .unwrap()
 }
