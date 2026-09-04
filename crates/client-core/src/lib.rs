@@ -11,6 +11,7 @@
 
 pub mod engine;
 pub mod hub;
+pub mod notify;
 pub mod store;
 
 pub use engine::{
@@ -18,4 +19,5 @@ pub use engine::{
     SyncError, SyncReport, KEY_PENDING,
 };
 pub use hub::{FileContent, HubClient, HubError};
+pub use notify::Notifier;
 pub use store::{BlobStore, MemStore, StoreError};

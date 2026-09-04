@@ -17,9 +17,10 @@ Implementation of `ArchitecturePlan.md`. Build order progress:
 - **Stage 4** - the client sync engine (`crates/client-core`): pulls hub
   changes into a local `BlobStore` (advancing a durable checkpoint only after
   a whole batch is written), pushes locally-recorded changes back, and never
-  drops a push the hub rejects. The `BlobStore` trait is the platform seam -
-  native uses the filesystem, web uses OPFS/IndexedDB; `MemStore` is the
-  test reference.
+  drops a push the hub rejects. Two platform seams: `BlobStore` (native uses
+  the filesystem, web uses OPFS/IndexedDB; `MemStore` is the test reference)
+  and `Notifier` (the app implements it to surface unexpected errors to the
+  user).
 - **Stage 5** - hub-side conflict resolver: a conflicted doc (from
   replication, or from a client push whose `base_rev` was stale) is resolved
   with a diff3 three-way merge, written CAS-conditioned on the winning

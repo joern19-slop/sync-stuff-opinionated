@@ -20,10 +20,22 @@ hub's control).
   while the manifest pointed at `crates/`; moved everything into place and
   bumped `testcontainers` 0.15 -> 0.23 (the API the tests were written for).
 - **Stage 3 (watcher + FCM/Discord)** - see `watcher.rs` / `notify.rs`.
-- **Stage 4 (client core)** - see `client-core/src/{engine,hub,store}.rs`.
+- **Stage 4 (client core)** - see `client-core/src/{engine,hub,store,notify}.rs`.
 - **Stage 5 + 6 (conflict resolver)** - see `resolver.rs` (hub-api) and
   `diff3.rs` (sync-core).
 - **Stage 7 (multi-hub failover)** - part of the client engine.
+
+## Client error reporting (your request)
+
+- `client-core` exposes a `Notifier` trait (`fn notify_error(&self, &SyncError)`)
+  that the actual client implements to show errors to the user (toast/dialog/
+  log). The engine calls it whenever it returns an unexpected error it can't
+  silently recover from: a hub that's unreachable after *every* fallback, or a
+  local store failure. A hub failure that failover recovered from is *not*
+  surfaced (it self-healed).
+- Store failures are treated as fatal-local and short-circuit the hub
+  failover loop (retrying another hub can't fix a broken local disk); only
+  hub/transport errors trigger fallover.
 
 ## Conflict resolver decisions
 
@@ -99,10 +111,10 @@ hub's control).
   longer surfaces conflicts to the client. The remaining question is purely
   app-level UX for those rare cases (what to *tell* the user), which can wait
   for the client implementation details.
-- **Per-platform `BlobStore` backings** (native FS, web OPFS/IndexedDB) and
-  the FCM-wake / foreground-open / charging-started trigger wiring - the core
-  exposes `SyncEngine::sync()` and the `BlobStore` trait; the platform glue
-  is next.
+- **Per-platform `BlobStore` backings** (native FS, web OPFS/IndexedDB), a
+  concrete `Notifier` implementation, and the FCM-wake / foreground-open /
+  charging-started trigger wiring - the core exposes `SyncEngine::sync()`,
+  the `BlobStore` trait, and the `Notifier` trait; the platform glue is next.
 - **WASM target.** `client-core` currently builds for native (reqwest +
   tokio). Compiling to `wasm32` will want the `reqwest` `js` feature and a
   `?Send`/single-threaded executor for the store/engine; noted, not done.

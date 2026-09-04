@@ -4,11 +4,12 @@
 //! full batch is durable.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use client_core::{
-    checkpoint_key, file_key, BlobStore, HubClient, MemStore, StoreError, SyncEngine,
+    checkpoint_key, file_key, BlobStore, HubClient, MemStore, Notifier, StoreError, SyncEngine,
+    SyncError,
 };
 use serde_json::json;
 use wiremock::matchers::{bearer_token, method, path, query_param, query_param_is_missing};
@@ -16,6 +17,24 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn hub_client(server: &MockServer) -> HubClient {
     HubClient::new(server.uri(), "dev-token")
+}
+
+/// A `Notifier` that records every error it's asked to surface.
+#[derive(Default)]
+struct CapturingNotifier {
+    errors: Mutex<Vec<String>>,
+}
+
+impl Notifier for CapturingNotifier {
+    fn notify_error(&self, error: &SyncError) {
+        self.errors.lock().unwrap().push(error.to_string());
+    }
+}
+
+impl CapturingNotifier {
+    fn captured(&self) -> Vec<String> {
+        self.errors.lock().unwrap().clone()
+    }
 }
 
 fn engine(server: &MockServer, store: Arc<dyn BlobStore>) -> SyncEngine {
@@ -335,4 +354,74 @@ async fn failover_tries_next_hub_when_first_is_unreachable() {
     let report = engine.push().await.unwrap();
     assert_eq!(report.pushed, 1);
     assert!(engine.pending().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn notifier_receives_unexpected_errors() {
+    // A closed port: every hub is unreachable, so sync must fail and the
+    // failure must be surfaced to the notifier.
+    let dead_addr = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        l.local_addr().unwrap()
+    };
+
+    let notifier = Arc::new(CapturingNotifier::default());
+    let engine = SyncEngine::new(
+        vec![HubClient::new(format!("http://{dead_addr}"), "dev-token")],
+        Arc::new(MemStore::default()),
+    )
+    .with_notifier(notifier.clone());
+
+    engine
+        .record_upsert("a.txt", 1, "text/plain", b"hi")
+        .await
+        .unwrap();
+
+    let result = engine.sync().await;
+    assert!(result.is_err());
+    assert!(!notifier.captured().is_empty());
+}
+
+#[tokio::test]
+async fn notifier_stays_silent_when_failover_recovers() {
+    // First hub down, second live: the error is recovered, so it must *not*
+    // be surfaced to the user.
+    let dead_addr = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        l.local_addr().unwrap()
+    };
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/changes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "path": "a.txt", "status": "ok", "rev": "1-a" }
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/changes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "changes": [], "checkpoint": "cp-1"
+        })))
+        .mount(&server)
+        .await;
+
+    let notifier = Arc::new(CapturingNotifier::default());
+    let engine = SyncEngine::new(
+        vec![
+            HubClient::new(format!("http://{dead_addr}"), "dev-token"),
+            hub_client(&server),
+        ],
+        Arc::new(MemStore::default()),
+    )
+    .with_notifier(notifier.clone());
+
+    engine
+        .record_upsert("a.txt", 1, "text/plain", b"hi")
+        .await
+        .unwrap();
+
+    engine.sync().await.unwrap();
+    assert!(notifier.captured().is_empty());
 }

@@ -25,6 +25,7 @@ use sync_core::{ChangeEntry, PushChange, PushResult, PushStatus};
 use thiserror::Error;
 
 use crate::hub::{FileContent, HubClient, HubError};
+use crate::notify::Notifier;
 use crate::store::{BlobStore, StoreError};
 
 /// Key holding the serialized pending-push queue.
@@ -100,11 +101,24 @@ pub struct SyncReport {
 pub struct SyncEngine {
     hubs: Vec<HubClient>,
     store: Arc<dyn BlobStore>,
+    notifier: Option<Arc<dyn Notifier>>,
 }
 
 impl SyncEngine {
     pub fn new(hubs: Vec<HubClient>, store: Arc<dyn BlobStore>) -> Self {
-        Self { hubs, store }
+        Self {
+            hubs,
+            store,
+            notifier: None,
+        }
+    }
+
+    /// Attach a [`Notifier`] that the engine calls whenever it returns an
+    /// unexpected error (a hub that's down after every fallback, a local
+    /// store failure, ...) so the app can show it to the user.
+    pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
+        self.notifier = Some(notifier);
+        self
     }
 
     /// Push, then pull - the app layer calls this on any wake trigger (FCM
@@ -123,22 +137,19 @@ impl SyncEngine {
     /// Pulls remote changes, advancing the checkpoint only once the whole
     /// batch is durable.
     pub async fn pull(&self) -> Result<PullReport, SyncError> {
-        let mut last_err = None;
+        let mut last_hub_err = None;
         for hub in &self.hubs {
             match self.pull_from(hub).await {
                 Ok(report) => return Ok(report),
+                // A store failure is fatal to every hub - don't fail over.
+                Err(e @ SyncError::Store(_)) => return Err(self.notify(e)),
                 Err(e) => {
                     tracing::warn!(hub = hub.id(), error = %e, "pull from hub failed");
-                    last_err = Some(e);
+                    last_hub_err = Some(e);
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            SyncError::Hub(HubError::Api {
-                status: 0,
-                body: "no hubs configured".to_string(),
-            })
-        }))
+        Err(self.notify(last_hub_err.unwrap_or_else(Self::no_hubs)))
     }
 
     async fn pull_from(&self, hub: &HubClient) -> Result<PullReport, SyncError> {
@@ -207,29 +218,26 @@ impl SyncEngine {
     /// Pushes the pending queue, clearing entries only on an explicit `Ok`
     /// from the hub.
     pub async fn push(&self) -> Result<PushReport, SyncError> {
-        let pending = self.load_pending().await?;
+        let pending = self.report(self.load_pending().await)?;
         if pending.is_empty() {
             return Ok(PushReport::default());
         }
 
-        let changes = self.build_push_changes(&pending).await?;
+        let changes = self.report(self.build_push_changes(&pending).await)?;
 
-        let mut last_err = None;
+        let mut last_hub_err = None;
         for hub in &self.hubs {
             match self.push_to(hub, &pending, &changes).await {
                 Ok(report) => return Ok(report),
+                // A store failure is fatal to every hub - don't fail over.
+                Err(e @ SyncError::Store(_)) => return Err(self.notify(e)),
                 Err(e) => {
                     tracing::warn!(hub = hub.id(), error = %e, "push to hub failed");
-                    last_err = Some(e);
+                    last_hub_err = Some(e);
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            SyncError::Hub(HubError::Api {
-                status: 0,
-                body: "no hubs configured".to_string(),
-            })
-        }))
+        Err(self.notify(last_hub_err.unwrap_or_else(Self::no_hubs)))
     }
 
     async fn push_to(
@@ -292,6 +300,19 @@ impl SyncEngine {
         content_type: &str,
         content: &[u8],
     ) -> Result<(), SyncError> {
+        self.report(
+            self.record_upsert_inner(path, mtime, content_type, content)
+                .await,
+        )
+    }
+
+    async fn record_upsert_inner(
+        &self,
+        path: &str,
+        mtime: i64,
+        content_type: &str,
+        content: &[u8],
+    ) -> Result<(), SyncError> {
         let key = file_key(path);
         let base_rev = self
             .store
@@ -323,6 +344,10 @@ impl SyncEngine {
 
     /// Record a local delete: remove the file durably, then queue a delete.
     pub async fn record_delete(&self, path: &str, mtime: i64) -> Result<(), SyncError> {
+        self.report(self.record_delete_inner(path, mtime).await)
+    }
+
+    async fn record_delete_inner(&self, path: &str, mtime: i64) -> Result<(), SyncError> {
         let key = file_key(path);
         let base_rev = self
             .store
@@ -433,6 +458,31 @@ impl SyncEngine {
             });
         }
         Ok(out)
+    }
+
+    /// Reports an unexpected error to the configured notifier (if any) and
+    /// returns it unchanged, so callers can `notify` and `return`/`?` in one
+    /// step.
+    fn notify(&self, error: SyncError) -> SyncError {
+        if let Some(notifier) = &self.notifier {
+            notifier.notify_error(&error);
+        }
+        error
+    }
+
+    /// Notifies on an `Err` and passes the result through unchanged.
+    fn report<T>(&self, result: Result<T, SyncError>) -> Result<T, SyncError> {
+        match result {
+            Ok(v) => Ok(v),
+            Err(e) => Err(self.notify(e)),
+        }
+    }
+
+    fn no_hubs() -> SyncError {
+        SyncError::Hub(HubError::Api {
+            status: 0,
+            body: "no hubs configured".to_string(),
+        })
     }
 }
 
