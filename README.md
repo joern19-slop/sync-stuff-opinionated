@@ -5,7 +5,7 @@ Implementation of `ArchitecturePlan.md`. Build order progress:
 - **Stage 1** - prove CouchDB-only redundancy (two standalone nodes,
   continuous bidirectional replication, either one survives alone).
   `docker-compose.yml` + `init-replication.sh` is the primary proof;
-  `crates/sync-core/tests/replication_e2e.rs` is an automated (testcontainers)
+  `crates/hub-api/tests/replication_e2e.rs` is an automated (testcontainers)
   version of the same thing.
 - **Stage 2** - the Rust Hub Sync API (`GET /changes`, `POST /changes`,
   `GET /file/{path}`) against a single CouchDB.
@@ -53,8 +53,8 @@ wiring for mobile - all deferred pending those concrete client targets. See
 
 ```
 Cargo.toml                 workspace
-crates/sync-core/          shared types, CouchDB client, diff3 merge
-crates/hub-api/             axum service: Hub Sync API + watcher/notifier/resolver
+crates/protocol-types/      wire types for the Hub Sync API (shared by hub + clients)
+crates/hub-api/             axum service: Hub Sync API + CouchDB client + diff3 + resolver
 crates/client-core/         client sync engine + MetaStore/FileStore traits (Stage 4/7)
 crates/client-desktop/      headless inotify client (the first concrete client)
 docker-compose.yml          two standalone CouchDB nodes (Stage 1)
@@ -137,7 +137,7 @@ signal feeds the same debounced reconcile/sync loop as local inotify events.
 cargo test
 
 # e2e - needs Docker (or podman with a docker socket); each test starts its own container(s)
-cargo test --test replication_e2e -- --ignored --nocapture   # in sync-core
+cargo test --test replication_e2e -- --ignored --nocapture   # in hub-api
 cargo test --test hub_api_e2e -- --ignored --nocapture       # in hub-api
 cargo test --test resolver_e2e -- --ignored --nocapture      # in hub-api
 cargo test -p client-core --test client_e2e -- --ignored --nocapture

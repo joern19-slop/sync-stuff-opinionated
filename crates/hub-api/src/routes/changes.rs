@@ -2,7 +2,9 @@ use axum::extract::{Query, State};
 use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
-use sync_core::{ChangeEntry, ChangesResponse, RawChangesResponse};
+use protocol_types::{ChangeEntry, ChangesResponse};
+
+use crate::couch::RawChangesResponse;
 
 use crate::{error::ApiError, state::AppState};
 

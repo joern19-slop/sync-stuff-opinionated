@@ -268,10 +268,10 @@ dependencies = [
  "base64",
  "bytes",
  "hub-api",
+ "protocol-types",
  "reqwest",
  "serde",
  "serde_json",
- "sync-core",
  "testcontainers",
  "thiserror 1.0.69",
  "tokio",
@@ -768,16 +768,18 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
+ "protocol-types",
  "reqwest",
  "serde",
  "serde_json",
- "sync-core",
  "testcontainers",
  "thiserror 1.0.69",
+ "threeway_merge",
  "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "wiremock",
 ]
 
@@ -1462,6 +1464,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "protocol-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2044,24 +2053,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "sync-core"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bytes",
- "reqwest",
- "serde",
- "serde_json",
- "testcontainers",
- "thiserror 1.0.69",
- "threeway_merge",
- "tokio",
- "tracing",
- "url",
- "wiremock",
 ]
 
 [[package]]

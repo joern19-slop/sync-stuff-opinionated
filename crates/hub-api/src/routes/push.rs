@@ -3,7 +3,10 @@ use axum::Json;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::json;
 use std::sync::Arc;
-use sync_core::{CouchError, PushChange, PushResult, PushStatus, Revisions};
+use protocol_types::{PushChange, PushResult, PushStatus};
+
+use crate::couch::Revisions;
+use crate::error::CouchError;
 
 use crate::resolver;
 use crate::state::AppState;

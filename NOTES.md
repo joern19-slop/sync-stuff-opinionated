@@ -6,6 +6,18 @@ Everything builds and tests pass, including the Docker-backed e2e tests
 (verified under podman with a docker socket). `cargo test`, `cargo test --
 --ignored`, and `cargo clippy --all-targets` are all clean.
 
+## Crate structure (reworked)
+
+`sync-core` was the wrong name for a crate that only held the hub/client wire
+types *and* a pile of hub-only CouchDB plumbing. It's now:
+
+- `protocol-types` - only the Hub Sync API wire structs + serde (shared by
+  `hub-api` and `client-core`).
+- `hub-api` - gained the CouchDB client (`couch.rs`), `diff3.rs`, and
+  `CouchError` as private modules; the Stage 1 `replication_e2e` test moved
+  here too.
+- `client-core` / `client-desktop` - unchanged responsibilities.
+
 ## Device token provisioning (per your decision)
 
 Bearer tokens (`HUB_DEVICE_TOKENS`) are provisioned by **manual copy into each
@@ -22,7 +34,7 @@ hub's control).
 - **Stage 3 (watcher + FCM/Discord)** - see `watcher.rs` / `notify.rs`.
 - **Stage 4 (client core)** - see `client-core/src/{engine,hub,store,notify}.rs`.
 - **Stage 5 + 6 (conflict resolver)** - see `resolver.rs` (hub-api) and
-  `diff3.rs` (sync-core).
+  `diff3.rs` (now in `hub-api`).
 - **Stage 7 (multi-hub failover)** - part of the client engine.
 
 ## Client error reporting (your request)

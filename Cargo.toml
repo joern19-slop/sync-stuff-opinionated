@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/sync-core",
+    "crates/protocol-types",
     "crates/hub-api",
     "crates/client-core",
     "crates/client-desktop",

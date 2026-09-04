@@ -1,5 +1,7 @@
 pub mod auth;
 pub mod config;
+pub mod couch;
+pub mod diff3;
 pub mod error;
 pub mod notify;
 pub mod resolver;
@@ -8,7 +10,8 @@ pub mod state;
 pub mod watcher;
 
 use std::sync::Arc;
-use sync_core::CouchClient;
+
+use couch::CouchClient;
 
 use config::Config;
 use state::AppState;
@@ -53,7 +56,7 @@ pub async fn run(cfg: &Config) -> anyhow::Result<()> {
   Ok(())
 }
 
-fn couch_client(cfg: &Config) -> Result<CouchClient, sync_core::CouchError> {
+fn couch_client(cfg: &Config) -> Result<CouchClient, crate::error::CouchError> {
   CouchClient::new(
     &cfg.couch_url,
     &cfg.couch_db,

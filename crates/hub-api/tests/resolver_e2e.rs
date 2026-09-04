@@ -6,7 +6,7 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hub_api::resolver::{self, Outcome, ResolutionKind};
-use sync_core::CouchClient;
+use hub_api::couch::CouchClient;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};

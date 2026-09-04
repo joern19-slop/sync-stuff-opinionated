@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use sync_core::CouchClient;
+use crate::couch::CouchClient;
 
 pub struct AppState {
   pub couch: CouchClient,

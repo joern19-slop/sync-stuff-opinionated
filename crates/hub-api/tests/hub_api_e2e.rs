@@ -4,7 +4,7 @@
 //!
 //! Run explicitly: `cargo test --test hub_api_e2e -- --ignored --nocapture`
 //!
-//! Same version-risk caveat as `sync-core/tests/replication_e2e.rs` applies
+//! Same version-risk caveat as `hub-api/tests/replication_e2e.rs` applies
 //! to the `testcontainers` usage below (single-container case here, so
 //! lower risk than the two-node network wiring there).
 
@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hub_api::config::Config;
 use serde_json::json;
-use sync_core::{ChangesResponse, PushResult, PushStatus};
+use protocol_types::{ChangesResponse, PushResult, PushStatus};
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};

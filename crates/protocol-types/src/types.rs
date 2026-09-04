@@ -1,10 +1,8 @@
-//! Wire types for the client-facing Hub Sync API.
+//! The client-facing Hub Sync API's wire types.
 //!
 //! These are deliberately separate from the raw CouchDB JSON shapes (see
-//! `couch.rs`) - clients never see CouchDB's document/revision model
-//! directly, only this contract. Keeping it in `sync-core` means the hub
-//! and the future Rust/WASM client share one definition instead of two
-//! independently-drifting copies.
+//! `hub-api`'s `couch` module) - clients never see CouchDB's document/revision
+//! model directly, only this contract.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,20 +27,6 @@ pub struct ChangesResponse {
   pub checkpoint: Checkpoint,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileMetadata {
-  pub path: String,
-  pub rev: String,
-  pub content_type: String,
-  pub size: u64,
-  /// Unix seconds. Client-supplied on push, echoed back on read - the hub
-  /// does not trust wall-clock time from itself for this field so that
-  /// conflict resolution's "keep the newer file by mtime" rule (see the
-  /// architecture doc) is driven by the client's view of edit time, not
-  /// upload time.
-  pub mtime: i64,
-}
-
 /// One local change a client wants to push. `base_rev` is the revision the
 /// client last observed for this path (`None` if the client believes the
 /// path doesn't exist on the hub yet, e.g. a brand new file).
@@ -64,10 +48,9 @@ pub struct PushChange {
 pub enum PushStatus {
   /// Write applied. `rev` is the new current revision for this path.
   Ok { rev: String },
-  /// `base_rev` was stale - someone else changed this path first. No
-  /// merge logic exists yet at this stage (see Stage 5 in the build
-  /// order); the client should just re-pull via `/changes` and decide
-  /// whether to retry.
+  /// `base_rev` was stale - someone else changed this path first. The hub
+  /// branches and resolves rather than rejecting, so this is now rare; the
+  /// client should keep the change queued and re-pull via `/changes`.
   Conflict,
 }
 

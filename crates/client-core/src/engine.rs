@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
-use sync_core::{ChangeEntry, PushChange, PushResult, PushStatus};
+use protocol_types::{ChangeEntry, PushChange, PushResult, PushStatus};
 use thiserror::Error;
 
 use crate::hub::{FileContent, HubClient, HubError};

@@ -8,7 +8,9 @@
 //! same deterministic algorithm, so when they race on the same conflict one
 //! wins the CAS and the other sees "already resolved" and stops.
 
-use sync_core::{diff3, CouchClient, CouchError, Revisions};
+use crate::couch::{CouchClient, Revisions};
+use crate::error::CouchError;
+use crate::diff3;
 
 const MAX_RETRIES: usize = 5;
 

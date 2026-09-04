@@ -1,12 +1,12 @@
-//! HTTP client for the Hub Sync API, the client-side counterpart to
-//! `sync-core::CouchClient` (which the *hub* uses internally). A client
+//! HTTP client for the Hub Sync API, the client-side counterpart to the
+//! CouchDB client the *hub* uses internally (`hub-api::couch`). A client
 //! speaks only this contract - it never talks CouchDB directly.
 //!
 //! Each `HubClient` targets a single hub; multi-hub failover is layered on
 //! top by the sync engine, which owns per-hub checkpoints (a CouchDB `seq`
 //! is node-local, so it must be scoped to the hub that issued it).
 
-use sync_core::{ChangesResponse, PushChange, PushResult};
+use protocol_types::{ChangesResponse, PushChange, PushResult};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -282,7 +282,7 @@ mod tests {
       .mount(&server)
       .await;
 
-    let changes = vec![sync_core::PushChange {
+    let changes = vec![protocol_types::PushChange {
       path: "a.txt".into(),
       deleted: false,
       base_rev: None,

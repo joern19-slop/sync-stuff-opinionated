@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use sync_core::{CouchClient, RawChangesResponse, SchedulerJob};
+use crate::couch::{CouchClient, RawChangesResponse, SchedulerJob};
 
 use crate::config::Config;
 use crate::notify::{DiscordClient, FcmClient};

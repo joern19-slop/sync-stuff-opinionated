@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use hub_api::config::Config;
 use serde_json::json;
-use sync_core::ChangesResponse;
+use protocol_types::ChangesResponse;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
