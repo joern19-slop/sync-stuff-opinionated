@@ -79,6 +79,15 @@ fn scan_dir(root: &Path, dir: &Path, out: &mut HashMap<String, i64>) -> Result<(
 
   for entry in entries.flatten() {
     let path = entry.path();
+    // Skip our own atomic-write temp files (`.{pid}-{n}.tmp`), which can be
+    // left behind after a crash between write and rename.
+    if path
+      .file_name()
+      .and_then(|n| n.to_str())
+      .is_some_and(|n| n.ends_with(".tmp"))
+    {
+      continue;
+    }
     let Ok(file_type) = entry.file_type() else {
       continue;
     };

@@ -13,10 +13,12 @@ mod reconcile;
 mod watcher;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use client_core::{HubClient, SyncEngine};
 use fs_store::{FsFileStore, FsMetaStore};
+use tokio::signal::unix::{signal, SignalKind};
 use tracing::info;
 
 #[tokio::main]
@@ -63,16 +65,43 @@ async fn main() -> Result<()> {
   for hub in hubs {
     poll::spawn(engine.clone(), hub, tx.clone());
   }
+
+  let mut sigterm = signal(SignalKind::terminate()).context("install SIGTERM handler")?;
+  let mut sigint = signal(SignalKind::interrupt()).context("install SIGINT handler")?;
+
   info!("watching for changes");
 
   loop {
-    // Wait for the first event, then stay quiet until events have
-    // stopped for `debounce`.
-    let _ = rx.recv().await;
-    while tokio::time::timeout(cfg.debounce, rx.recv()).await.is_ok() {}
-
-    if let Err(e) = reconcile::reconcile_and_sync(&engine, &cfg.dir).await {
-      tracing::error!(error = %e, "reconcile/sync failed");
+    tokio::select! {
+      _ = rx.recv() => {
+        // Wait for the first event, then stay quiet until events have
+        // stopped for `debounce`.
+        while tokio::time::timeout(cfg.debounce, rx.recv()).await.is_ok() {}
+        if let Err(e) = reconcile::reconcile_and_sync(&engine, &cfg.dir).await {
+          tracing::error!(error = %e, "reconcile/sync failed");
+        }
+      }
+      // An in-progress reconcile always completes first (the select arm body
+      // runs to the end); we only reach here between syncs.
+      _ = sigterm.recv() => break,
+      _ = sigint.recv() => break,
     }
   }
+
+  // Graceful stop: finish any queued work with one final sync, bounded so a
+  // dead hub can't hang shutdown. The durable checkpoint makes an interrupted
+  // sync safe regardless.
+  info!("shutdown requested; finishing");
+  match tokio::time::timeout(
+    Duration::from_secs(30),
+    reconcile::reconcile_and_sync(&engine, &cfg.dir),
+  )
+  .await
+  {
+    Ok(Ok(())) => info!("final sync complete"),
+    Ok(Err(e)) => tracing::error!(error = %e, "final sync failed"),
+    Err(_) => tracing::warn!("final sync timed out"),
+  }
+
+  Ok(())
 }

@@ -17,7 +17,7 @@ static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn tmp_name() -> String {
   let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-  format!(".tmp-{}-{n}", std::process::id())
+  format!(".{}-{n}.tmp", std::process::id())
 }
 
 async fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
@@ -77,8 +77,9 @@ impl MetaStore for FsMetaStore {
     while let Some(entry) = rd.next_entry().await.map_err(io_err)? {
       let name = entry.file_name();
       let Some(name) = name.to_str() else { continue };
-      // Our own atomic-write temp files are never a real key.
-      if name.starts_with('.') {
+      // Our own atomic-write temp files (`.{pid}-{n}.tmp`) are never a real
+      // key.
+      if name.ends_with(".tmp") {
         continue;
       }
       if let Ok(decoded) = urlencoding::decode(name) {

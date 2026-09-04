@@ -149,6 +149,19 @@ hub's control).
   edit that lands within the same second as the last sync (or a tool that
   restores mtime) can be missed while the client is off. Matches the hub's
   second-resolution "keep newer" rule; can be hardened with size/hash later.
+- **Temp files.** `FsFileStore`/`FsMetaStore` write via a temp file
+  `.{pid}-{n}.tmp` in the target directory, then rename. Both the sync-dir scan
+  (`reconcile.rs`) and the metadata `list_keys` skip names ending in `.tmp`, so
+  a temp left behind by a crash between write and rename is ignored rather
+  than synced up as a real file.
+- **Atomic writes vs. open editor handles.** Both a local `record_upsert` and
+  a pulled remote change replace a file via temp+rename, changing its inode.
+  An editor holding the file open keeps the old (now-unlinked) inode, so a
+  save after a pull writes to a file no longer in the sync dir - the classic
+  atomic-sync/editor mismatch (Dropbox-style tools hit it too). The orphaned
+  bytes are still in the editor (not lost from the *sync* layer), but it's a
+  real footgun. Mitigations (not done): write in place when content is
+  unchanged, or hold off pulling a path with a known open handle.
 
 ## Hub -> client wake (desktop): long-poll
 
@@ -166,6 +179,19 @@ hub's control).
 - This gives sub-second remote-change latency with ~one held connection per
   hub, and no idle polling. WebSocket/SSE was considered and skipped as
   overkill for 2-3 devices.
+- **Missed-wake window.** The poll task advances its own `since` (a
+  wake-detection checkpoint) on *every* response, including one that just
+  signalled a wake. If the follow-up reconcile/sync fails (a transient error
+  between the long-poll and the pull), the engine's pull checkpoint lags but
+  the poll's `since` has already moved past those changes, so they won't
+  re-wake. They're deferred until the *next* trigger of any kind (a new remote
+  change, a local edit, or a restart). Accepted for now: it self-heals on the
+  next event and can't lose data, but a hub that flakes *between* long-poll
+  and pull can leave remote changes un-pulled while the client sits idle.
+  Fix options (not done): re-read the engine checkpoint before each long-poll
+  (self-healing, but tight-loops while a hub is persistently down), or advance
+  `since` only on empty/timeout responses and reset it to the engine's
+  checkpoint on a wake.
 
 ## Still open
 

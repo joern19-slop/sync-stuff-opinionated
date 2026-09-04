@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use tokio::sync::mpsc::UnboundedSender;
@@ -20,6 +21,9 @@ const WATCH_MASK: WatchMask = WatchMask::CREATE
   .union(WatchMask::MOVED_TO)
   .union(WatchMask::ATTRIB);
 
+/// How long to wait before retrying a failed watch.
+const RETRY_INTERVAL: Duration = Duration::from_secs(300);
+
 /// Spawns a background thread that watches `root` recursively and sends `()`
 /// on `changed` whenever anything under it changes.
 pub fn spawn(root: PathBuf, changed: UnboundedSender<()>) -> std::io::Result<()> {
@@ -29,27 +33,32 @@ pub fn spawn(root: PathBuf, changed: UnboundedSender<()>) -> std::io::Result<()>
   Ok(())
 }
 
+/// Outer loop: (re)establish the watch, retrying on failure. A failed watch
+/// is logged; a *repeated* failure also notifies the user, then it sleeps
+/// `RETRY_INTERVAL` and tries again.
 fn run(root: PathBuf, changed: UnboundedSender<()>) {
-  let mut inotify = match Inotify::init() {
-    Ok(i) => i,
-    Err(e) => {
-      tracing::error!(error = %e, "inotify init failed");
-      return;
+  let mut failures = 0u32;
+  loop {
+    if let Err(e) = watch(root.clone(), &changed) {
+      failures += 1;
+      tracing::error!(error = %e, "inotify watch failed");
+      if failures > 1 {
+        crate::notifier::show_notification("filesync", "File watcher failed; retrying");
+      }
+      std::thread::sleep(RETRY_INTERVAL);
     }
-  };
+  }
+}
+
+fn watch(root: PathBuf, changed: &UnboundedSender<()>) -> std::io::Result<()> {
+  let mut inotify = Inotify::init()?;
 
   let mut dirs: HashMap<WatchDescriptor, PathBuf> = HashMap::new();
   watch_tree(&mut inotify, &mut dirs, &root);
 
   let mut buf = [0u8; 4096];
   loop {
-    let events = match inotify.read_events_blocking(&mut buf) {
-      Ok(e) => e,
-      Err(e) => {
-        tracing::error!(error = %e, "inotify read failed");
-        return;
-      }
-    };
+    let events = inotify.read_events_blocking(&mut buf)?;
 
     for event in events {
       if event.mask.contains(EventMask::IGNORED) {

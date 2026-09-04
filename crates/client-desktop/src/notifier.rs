@@ -2,14 +2,31 @@
 //! user's desktop (via notify-rust / libnotify).
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use client_core::{Notifier, SyncError};
 
-/// Logs each error and pops a desktop notification. Notifications are
-/// de-duplicated by message so a persistently-down hub doesn't spam a toast
-/// on every retry.
+/// Identical errors are suppressed within this window so a persistently-down
+/// hub doesn't toast on every retry, but a recovery followed by a fresh
+/// failure still re-notifies.
+const DEDUPE_WINDOW: Duration = Duration::from_secs(300);
+
+/// Pops a desktop notification, best-effort (a missing notification daemon is
+/// logged, not fatal). Shared by the [`Notifier`] impl and the file watcher.
+pub(crate) fn show_notification(summary: &str, body: &str) {
+  let shown = notify_rust::Notification::new()
+    .summary(summary)
+    .body(body)
+    .show();
+  if let Err(e) = shown {
+    tracing::warn!(error = %e, "desktop notification failed");
+  }
+}
+
+/// Logs each error and pops a desktop notification, de-duplicated by message
+/// within [`DEDUPE_WINDOW`].
 pub struct LogNotifier {
-  last: Mutex<Option<String>>,
+  last: Mutex<Option<(String, Instant)>>,
 }
 
 impl Default for LogNotifier {
@@ -25,19 +42,16 @@ impl Notifier for LogNotifier {
     tracing::error!(error = %error, "sync failed");
 
     let message = error.to_string();
+    let now = Instant::now();
     let mut last = self.last.lock().unwrap();
-    if last.as_deref() == Some(message.as_str()) {
-      return;
+    if let Some((prev, at)) = last.as_ref() {
+      if prev == &message && now.duration_since(*at) < DEDUPE_WINDOW {
+        return;
+      }
     }
-    *last = Some(message.clone());
+    *last = Some((message.clone(), now));
     drop(last);
 
-    let shown = notify_rust::Notification::new()
-      .summary("filesync")
-      .body(&message)
-      .show();
-    if let Err(e) = shown {
-      tracing::warn!(error = %e, "desktop notification failed");
-    }
+    show_notification("filesync", &message);
   }
 }
