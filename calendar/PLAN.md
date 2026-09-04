@@ -198,6 +198,18 @@ files). So "extract the calendar" ≈ "keep the whole app". Realistic options:
   layer + its minimal `platform-kit`/`ui` closure into a small Mithril host.
 - **Rebasing against upstream is deferred** to the end (the extraction will
   diverge; figure out the reconcile strategy then).
+- **Translation is already implemented by Tuta** (no `ical.js`, no new mapper):
+  `CalendarParser.ts` (`parseCalendarStringData`) for `.ics`→entity, and
+  `CalendarExporter.ts` (`serializeCalendar`) for entity→`.ics`; entity
+  construction (incl. `_id`/`_ownerGroup`) is `CalendarModel.createEvent` /
+  `CalendarImporter.prepareEventForImport`. The swap is mostly *wiring*.
+- **Keep crypto in place** (skip dropping argon2/liboqs/InstancePipeline): it
+  stays unused-but-present once `restInterface` no longer goes through it, and
+  removing it adds complexity for no functional gain. (Cost: the build stays
+  heavy — acceptable.)
+- **Repo**: fork `joern19-slop/tutanota` as a submodule at `third_party/tutanota`;
+  work on branch `filesync-backend` (not master). Remotes: `origin` = fork,
+  `upstream` = `tutao/tutanota`.
 
 ### Phase 4 — entity ↔ `.ics` translation
 - Implement the mapping table above; UID ↔ element-id resolution.
