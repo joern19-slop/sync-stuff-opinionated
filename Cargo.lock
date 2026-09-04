@@ -302,6 +302,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "client-web"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "client-core",
+ "js-sys",
+ "urlencoding",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "common"
 version = "0.1.0"
 dependencies = [

@@ -27,7 +27,8 @@ pub enum StoreError {
 
 /// Small bookkeeping blobs, addressed by an opaque key. The engine owns the
 /// key convention (see `engine`); backends just persist bytes by key.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait MetaStore: Send + Sync {
   async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError>;
   async fn put(&self, key: &str, value: Vec<u8>) -> Result<(), StoreError>;
@@ -41,7 +42,8 @@ pub trait MetaStore: Send + Sync {
 /// is the file's modification time (Unix seconds) - the native backend uses it
 /// to keep the on-disk mtime consistent with the sync metadata so a later
 /// reconciliation doesn't mistake its own write for a new local edit.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait FileStore: Send + Sync {
   async fn get(&self, path: &str) -> Result<Option<Vec<u8>>, StoreError>;
   async fn put(&self, path: &str, data: Vec<u8>, mtime: i64) -> Result<(), StoreError>;
@@ -57,7 +59,8 @@ pub struct MemStore {
   files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl MetaStore for MemStore {
   async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
     Ok(self.meta.lock().unwrap().get(key).cloned())
@@ -87,7 +90,8 @@ impl MetaStore for MemStore {
   }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl FileStore for MemStore {
   async fn get(&self, path: &str) -> Result<Option<Vec<u8>>, StoreError> {
     Ok(self.files.lock().unwrap().get(path).cloned())
