@@ -217,3 +217,46 @@ impl MetaStore for OpfsMetaStore {
     )
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use wasm_bindgen_test::wasm_bindgen_test;
+
+  wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+  #[wasm_bindgen_test]
+  async fn file_store_roundtrips_nested_paths() {
+    let store = OpfsFileStore::open().await.unwrap();
+    assert_eq!(FileStore::get(&store, "a/b.txt").await.unwrap(), None);
+    FileStore::put(&store, "a/b.txt", b"hello".to_vec(), 42)
+      .await
+      .unwrap();
+    assert_eq!(
+      FileStore::get(&store, "a/b.txt").await.unwrap(),
+      Some(b"hello".to_vec())
+    );
+    FileStore::delete(&store, "a/b.txt").await.unwrap();
+    assert_eq!(FileStore::get(&store, "a/b.txt").await.unwrap(), None);
+  }
+
+  #[wasm_bindgen_test]
+  async fn meta_store_roundtrips_and_lists() {
+    let store = OpfsMetaStore::open().await.unwrap();
+    MetaStore::put(&store, "file/x", b"meta".to_vec())
+      .await
+      .unwrap();
+    MetaStore::put(&store, "checkpoint/h", b"cp-1".to_vec())
+      .await
+      .unwrap();
+    assert_eq!(
+      MetaStore::get(&store, "file/x").await.unwrap(),
+      Some(b"meta".to_vec())
+    );
+    let mut keys = MetaStore::list_keys(&store, "file/").await.unwrap();
+    keys.sort();
+    assert_eq!(keys, vec!["file/x"]);
+    MetaStore::delete(&store, "file/x").await.unwrap();
+    assert_eq!(MetaStore::get(&store, "file/x").await.unwrap(), None);
+  }
+}
