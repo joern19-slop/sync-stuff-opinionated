@@ -37,25 +37,32 @@ bootstrap_single_node() {
 bootstrap_single_node "$NODE_A"
 bootstrap_single_node "$NODE_B"
 
-echo "ensuring $DB exists on both nodes..."
-curl -s -u "$USER:$PASS" -X PUT "$NODE_A/$DB" >/dev/null || true
-curl -s -u "$USER:$PASS" -X PUT "$NODE_B/$DB" >/dev/null || true
+echo "ensuring $DB and _replicator exist on both nodes..."
+for db in "$DB" "_replicator"; do
+  curl -s -u "$USER:$PASS" -X PUT "$NODE_A/$db" >/dev/null || true
+  curl -s -u "$USER:$PASS" -X PUT "$NODE_B/$db" >/dev/null || true
+done
 
 # One continuous *push* replication configured at each node, addressing the
 # other by its docker-compose service name (both containers share the
 # compose network, so "node-a"/"node-b" resolve there even though the host
 # only sees them on localhost:5984/5985).
+#
+# Both source and target are full URLs (not the bare local db name):
+# CouchDB 3.2+ rejects `_replicator` docs whose source/target is a local
+# endpoint ("local_endpoints_not_supported"), so the source points back at
+# the node itself by service name.
 create_replication() {
-  local at_url=$1 target_service=$2 repl_id=$3
+  local at_url=$1 source_service=$2 target_service=$3 repl_id=$4
   curl -s -u "$USER:$PASS" -X PUT "$at_url/_replicator/$repl_id" \
     -H 'Content-Type: application/json' \
-    -d "{\"source\":\"$DB\",\"target\":\"http://$USER:$PASS@$target_service:5984/$DB\",\"continuous\":true}" \
+    -d "{\"source\":\"http://$USER:$PASS@$source_service:5984/$DB\",\"target\":\"http://$USER:$PASS@$target_service:5984/$DB\",\"continuous\":true}" \
     >/dev/null || true
 }
 
 echo "configuring bidirectional continuous replication..."
-create_replication "$NODE_A" node-b "a-to-b"
-create_replication "$NODE_B" node-a "b-to-a"
+create_replication "$NODE_A" node-a node-b "a-to-b"
+create_replication "$NODE_B" node-b node-a "b-to-a"
 
 echo "done. Try:"
 echo "  curl -u $USER:$PASS -X PUT $NODE_A/$DB/hello -d '{\"msg\":\"hi\"}' -H 'Content-Type: application/json'"

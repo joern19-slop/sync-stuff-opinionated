@@ -61,6 +61,9 @@ mod tests {
 
     #[test]
     fn seq_to_checkpoint_falls_back_to_json_repr_for_non_strings() {
-        assert_eq!(seq_to_checkpoint(&serde_json::json!([42, "abc"])), "[42,\"abc\"]");
+        assert_eq!(
+            seq_to_checkpoint(&serde_json::json!([42, "abc"])),
+            "[42,\"abc\"]"
+        );
     }
 }

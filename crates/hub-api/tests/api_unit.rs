@@ -28,6 +28,11 @@ async fn start_hub_against(couch: &MockServer) -> (String, reqwest::Client) {
         couch_user: "hub".to_string(),
         couch_password: "hub-password".to_string(),
         device_tokens,
+        fcm_server_key: None,
+        fcm_device_tokens: vec![],
+        discord_webhook_url: None,
+        watcher_poll_secs: 2,
+        repl_staleness_secs: 300,
     };
 
     let app = hub_api::build_app(&cfg).await.expect("build app");
@@ -87,8 +92,14 @@ async fn get_changes_maps_couchdb_changes_feed_into_the_api_contract() {
     assert_eq!(body.checkpoint, "17-xyz");
     // The design doc must never surface as a file change.
     assert_eq!(body.changes.len(), 2);
-    assert!(body.changes.iter().any(|c| c.path == "notes/a.txt" && !c.deleted && c.rev == "3-abc"));
-    assert!(body.changes.iter().any(|c| c.path == "gone.txt" && c.deleted));
+    assert!(body
+        .changes
+        .iter()
+        .any(|c| c.path == "notes/a.txt" && !c.deleted && c.rev == "3-abc"));
+    assert!(body
+        .changes
+        .iter()
+        .any(|c| c.path == "gone.txt" && c.deleted));
 }
 
 #[tokio::test]

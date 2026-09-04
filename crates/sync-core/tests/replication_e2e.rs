@@ -26,9 +26,12 @@ const COUCH_USER: &str = "hub";
 const COUCH_PASS: &str = "hub-password";
 const DB: &str = "filesync";
 
-fn couch_image(container_name: &str, network: &str) -> impl testcontainers::Image {
+fn couch_image(
+    container_name: &str,
+    network: &str,
+) -> testcontainers::ContainerRequest<testcontainers::GenericImage> {
     GenericImage::new("couchdb", "3.3")
-        .with_wait_for(WaitFor::message_on_stdout("Apache CouchDB has started"))
+        .with_wait_for(WaitFor::message_on_stderr("Apache CouchDB has started"))
         .with_exposed_port(ContainerPort::Tcp(5984))
         .with_env_var("COUCHDB_USER", COUCH_USER)
         .with_env_var("COUCHDB_PASSWORD", COUCH_PASS)
@@ -36,45 +39,38 @@ fn couch_image(container_name: &str, network: &str) -> impl testcontainers::Imag
         .with_container_name(container_name)
 }
 
-async fn bootstrap_single_node(http: &reqwest::Client, base_url: &str) {
-    let resp = http
-        .post(format!("{base_url}/_cluster_setup"))
-        .basic_auth(COUCH_USER, Some(COUCH_PASS))
-        .json(&serde_json::json!({
-            "action": "enable_single_node",
-            "username": COUCH_USER,
-            "password": COUCH_PASS,
-            "bind_address": "0.0.0.0",
-            "port": 5984,
-            "singlenode": true
-        }))
-        .send()
-        .await
-        .expect("cluster setup request");
-    if !resp.status().is_success() {
-        // Recent official images auto-finish single-node setup already;
-        // only fail the test on a *different* error.
-        let body = resp.text().await.unwrap_or_default();
+async fn ensure_db(http: &reqwest::Client, base_url: &str) {
+    // The official couchdb image auto-finishes single-node setup when
+    // COUCHDB_USER/COUCHDB_PASSWORD are set (the admin is asserted in its
+    // preflight check *before* the "Apache CouchDB has started" line the
+    // container's wait condition matches). No manual `_cluster_setup` call -
+    // re-issuing it against an already-setup node restarts chttpd and breaks
+    // the next request.
+    //
+    // `_replicator` is not auto-created on a fresh single-node install, so
+    // create it alongside the data db - writing a replication doc to a
+    // missing `_replicator` db is a 404.
+    for db in [DB, "_replicator"] {
+        let resp = http
+            .put(format!("{base_url}/{db}"))
+            .basic_auth(COUCH_USER, Some(COUCH_PASS))
+            .send()
+            .await
+            .expect("create db request");
         assert!(
-            body.contains("cluster_finished") || body.contains("already"),
-            "unexpected cluster setup failure: {body}"
+            resp.status().is_success() || resp.status().as_u16() == 412,
+            "failed to create db {db}: {}",
+            resp.status()
         );
     }
-
-    let resp = http
-        .put(format!("{base_url}/{DB}"))
-        .basic_auth(COUCH_USER, Some(COUCH_PASS))
-        .send()
-        .await
-        .expect("create db request");
-    assert!(
-        resp.status().is_success() || resp.status().as_u16() == 412,
-        "failed to create db: {}",
-        resp.status()
-    );
 }
 
-async fn wait_for_doc(http: &reqwest::Client, base_url: &str, id: &str, timeout: Duration) -> serde_json::Value {
+async fn wait_for_doc(
+    http: &reqwest::Client,
+    base_url: &str,
+    id: &str,
+    timeout: Duration,
+) -> serde_json::Value {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let resp = http
@@ -110,32 +106,43 @@ async fn two_nodes_replicate_bidirectionally_and_survive_one_going_down() {
 
     let a_port = node_a.get_host_port_ipv4(5984).await.expect("node-a port");
     let b_port = node_b.get_host_port_ipv4(5984).await.expect("node-b port");
-    let a_url = format!("http://localhost:{a_port}");
-    let b_url = format!("http://localhost:{b_port}");
+    // 127.0.0.1, not `localhost`: podman's IPv6 (`::1`) port forwarding drops
+    // request bodies, so force IPv4.
+    let a_url = format!("http://127.0.0.1:{a_port}");
+    let b_url = format!("http://127.0.0.1:{b_port}");
 
-    bootstrap_single_node(&http, &a_url).await;
-    bootstrap_single_node(&http, &b_url).await;
+    ensure_db(&http, &a_url).await;
+    ensure_db(&http, &b_url).await;
 
     // Wire up bidirectional continuous replication using each node's
     // in-network hostname (they share `network`, so "node-a"/"node-b"
     // resolve to each other from *inside* the containers - unlike the
     // localhost:port URLs the test itself uses from the host side).
-    for (at_url, target_host, repl_id) in [
-        (&a_url, "node-b", "a-to-b"),
-        (&b_url, "node-a", "b-to-a"),
+    //
+    // Both source and target are full URLs (not the bare local db name):
+    // CouchDB 3.2+ rejects `_replicator` docs whose source/target is a local
+    // endpoint ("local_endpoints_not_supported"), so the source points back
+    // at the node itself by name.
+    for (at_url, source_host, target_host, repl_id) in [
+        (&a_url, "node-a", "node-b", "a-to-b"),
+        (&b_url, "node-b", "node-a", "b-to-a"),
     ] {
         let resp = http
             .put(format!("{at_url}/_replicator/{repl_id}"))
             .basic_auth(COUCH_USER, Some(COUCH_PASS))
             .json(&serde_json::json!({
-                "source": DB,
+                "source": format!("http://{COUCH_USER}:{COUCH_PASS}@{source_host}:5984/{DB}"),
                 "target": format!("http://{COUCH_USER}:{COUCH_PASS}@{target_host}:5984/{DB}"),
                 "continuous": true
             }))
             .send()
             .await
             .expect("create replication doc");
-        assert!(resp.status().is_success(), "replication setup failed: {}", resp.status());
+        assert!(
+            resp.status().is_success(),
+            "replication setup failed: {}",
+            resp.status()
+        );
     }
 
     // Write to A, confirm it shows up on B.
@@ -174,7 +181,10 @@ async fn two_nodes_replicate_bidirectionally_and_survive_one_going_down() {
         .send()
         .await
         .expect("read from b after a is down");
-    assert!(resp.status().is_success(), "b should still serve reads with a down");
+    assert!(
+        resp.status().is_success(),
+        "b should still serve reads with a down"
+    );
 
     let resp = http
         .put(format!("{b_url}/{DB}/written-while-a-down"))
@@ -183,5 +193,8 @@ async fn two_nodes_replicate_bidirectionally_and_survive_one_going_down() {
         .send()
         .await
         .expect("write to b after a is down");
-    assert!(resp.status().is_success(), "b should still accept writes with a down");
+    assert!(
+        resp.status().is_success(),
+        "b should still accept writes with a down"
+    );
 }

@@ -9,7 +9,10 @@ use crate::{auth::require_device_token, state::AppState};
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/changes", get(changes::get_changes).post(push::post_changes))
+        .route(
+            "/changes",
+            get(changes::get_changes).post(push::post_changes),
+        )
         .route("/file/*path", get(file::get_file))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

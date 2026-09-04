@@ -1,6 +1,21 @@
-//! Local sync engine (SQLite change log, conflict resolver, transport)
-//! that will live here starting at Build Order Stage 4. Left as an empty
-//! crate for now so the workspace shape matches the target architecture
-//! from the start, per your preference.
+//! Rust/WASM client sync core (Build Order Stage 4 + 7).
+//!
+//! The engine pulls hub changes into a local `BlobStore` (advancing a
+//! durable checkpoint only after each batch is fully written) and pushes
+//! locally-recorded changes back up, with ordered multi-hub failover. It
+//! owns no merge logic: clients only ever observe the hub's resolved view.
+//!
+//! Platform layers (native, WASM+web) provide a `BlobStore` implementation
+//! and wire `SyncEngine::sync()` to the wake triggers (FCM background
+//! handler, app foreground-open, charging-started).
 
-pub fn placeholder() {}
+pub mod engine;
+pub mod hub;
+pub mod store;
+
+pub use engine::{
+    checkpoint_key, file_key, PendingChange, PullReport, PushReport, StoredFile, SyncEngine,
+    SyncError, SyncReport, KEY_PENDING,
+};
+pub use hub::{FileContent, HubClient, HubError};
+pub use store::{BlobStore, MemStore, StoreError};

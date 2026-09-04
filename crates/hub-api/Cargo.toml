@@ -16,6 +16,8 @@ tracing-subscriber = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 anyhow = "1"
+time = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["json"] }

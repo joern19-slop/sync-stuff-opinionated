@@ -22,7 +22,8 @@ urlencoding = "2"
 base64 = "0.22"
 bytes = "1"
 async-trait = "0.1"
+time = { version = "0.3", features = ["parsing"] }
 
 # dev/test-only
 wiremock = "0.6"
-testcontainers = "0.15"
+testcontainers = "0.23"
