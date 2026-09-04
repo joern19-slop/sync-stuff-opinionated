@@ -188,6 +188,61 @@ even though nothing was actually lost.
   clear `_conflicts`.
 - No second/conflict-copy file is needed here — unlike edit-vs-edit, there's
   no content on the "losing" side to preserve. Nothing is lost.
+  
+## Calendar & Contacts (Phase 2)
+
+Calendar (and later contacts) ride on Radicale as the CalDAV/CardDAV frontend,
+with a custom Radicale *storage plugin* that persists collections/items directly
+in fss over the Hub Sync API. No local `.ics`/`.vcf` directory to sync.
+
+### Why Radicale + an fss storage plugin
+- Radicale speaks CalDAV/CardDAV; standard clients attach for free.
+- Storage is pluggable: `[storage] type = <module>` loads a class extending
+  `radicale.storage.BaseStorage` (`BaseCollection` / `BaseItem`).
+- The default `multifilesystem` backend already maps item -> `.ics`/`.vcf`
+  file; an fss backend keeps that shape but stores each "file" as an fss doc,
+  so replication / hub-side diff3 / never-lose-data come from the engine.
+
+### Mapping
+| Radicale | fss |
+|---|---|
+| collection (calendar/addressbook) | path prefix `calendars/<uid>/`, metadata in `.Radicale.props` |
+| item (VEVENT/VTODO/VJOURNAL/VCARD) | one doc `calendars/<uid>/<item>.ics` / `.vcf` |
+| item `etag` | fss `rev` |
+| `BaseCollection.sync(old_token)` | `GET /changes?since=<checkpoint>` |
+| item write (`upload`) | `POST /changes` (CAS via `base_rev`) |
+| conflicts | hub-side diff3 + `.conflict-*` copies |
+
+### Storage plugin (HTTP)
+- Python `Storage` class implementing `BaseStorage`/`BaseCollection`/`BaseItem`,
+  talking to the hub over the same Hub Sync API every client uses, with the
+  shared bearer token. No FFI - honors "clients only speak the hub API".
+- Replaces filesystem locking with CouchDB `_rev`/CAS.
+- First cut: `sync()` derives a per-collection token from item etags; later
+  optimization: persist fss checkpoints per collection.
+
+### Backups
+- Live redundancy: fss 2-hub CouchDB replication (already built).
+- Point-in-time: restic/borg on the CouchDB data dir (no `.ics` dir remains).
+
+### Clients
+- **Android: DAVx5 + Etar/Fossify** - mature; syncs into the Android system
+  calendar, which fires OS-level reminders reliably (even in background).
+- **Web: STILL TODO.** No standalone open-source CalDAV web client is settled
+  yet; see open question below. Candidates evaluated: Nextcloud Calendar,
+  AgenDAV, InfCloud, SOGo, Calino (rejected - too small, no server reminders).
+
+### Reminder gap (open)
+CalDAV stores `VALARM` reminders *inside* events and Radicale round-trips them,
+but no plain CalDAV server *fires* them - delivery is a client's job. Android
+(system calendar) is reliable; a web client can only notify while open/PWA.
+Server-side email/push reminders require Nextcloud or SOGo, not Radicale.
+
+### Build order (phase 2)
+1. Radicale + fss storage plugin against one hub (item CRUD, collection sync).
+2. DAVx5 + Etar against Radicale (Android, incl. reminders).
+3. Web client: decide from open question below.
+4. Contacts: same plugin, CardDAV `.vcf` (no new work).
 
 ## Open Questions / Next Steps
 
