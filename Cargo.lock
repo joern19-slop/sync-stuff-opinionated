@@ -312,8 +312,11 @@ name = "client-web"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "client-core",
+ "common",
  "js-sys",
+ "serde_json",
  "urlencoding",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -808,6 +811,7 @@ dependencies = [
  "threeway_merge",
  "time",
  "tokio",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "url",

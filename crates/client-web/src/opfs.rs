@@ -36,6 +36,14 @@ async fn await_void(promise: Promise) -> Result<(), StoreError> {
   Ok(())
 }
 
+/// Whether a rejected JS value is a `NotFoundError` DOMException.
+fn is_not_found(e: &wasm_bindgen::JsValue) -> bool {
+  js_sys::Reflect::get(e, &wasm_bindgen::JsValue::from_str("name"))
+    .ok()
+    .and_then(|n| n.as_string())
+    .is_some_and(|name| name == "NotFoundError")
+}
+
 /// Shared handle to the OPFS root directory.
 #[derive(Clone)]
 struct OpfsRoot {
@@ -100,16 +108,33 @@ impl OpfsRoot {
     };
     let mut dir = self.handle.clone();
     for part in parents {
-      dir = await_promise(dir.get_directory_handle(part)).await?;
+      let resolved = match JsFuture::from(dir.get_directory_handle(part)).await {
+        Ok(v) => v,
+        // A missing parent means the file can't exist - nothing to remove.
+        Err(e) if is_not_found(&e) => return Ok(()),
+        Err(e) => return Err(js_err(e)),
+      };
+      dir = resolved.dyn_into().map_err(js_err)?;
     }
-    await_void(dir.remove_entry(last)).await
+    // Idempotent: removing an already-removed file is a no-op.
+    match JsFuture::from(dir.remove_entry(last)).await {
+      Ok(_) => Ok(()),
+      Err(e) if is_not_found(&e) => Ok(()),
+      Err(e) => Err(js_err(e)),
+    }
   }
 
   /// Flat listing of `dir`: returns the entry names (files only), no recursion.
   async fn list(&self, dir: &str) -> Result<Vec<String>, StoreError> {
     let mut handle = self.handle.clone();
     for part in dir.split('/').filter(|s| !s.is_empty()) {
-      handle = await_promise(handle.get_directory_handle(part)).await?;
+      let resolved = match JsFuture::from(handle.get_directory_handle(part)).await {
+        Ok(v) => v,
+        // A missing directory simply has no keys.
+        Err(e) if is_not_found(&e) => return Ok(Vec::new()),
+        Err(e) => return Err(js_err(e)),
+      };
+      handle = resolved.dyn_into().map_err(js_err)?;
     }
 
     let mut out = Vec::new();

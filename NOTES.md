@@ -227,13 +227,15 @@ hub's control).
   leaves the pending queue untouched, so nothing is ever silently lost. The
   remaining question is purely app-level UX for those rare cases (what to
   *tell* the user), which can wait for the client implementation details.
-- **WASM target (in progress).** `client-core` + `common` now compile to
-  `wasm32-unknown-unknown` (reqwest auto-uses `fetch` on wasm; `tokio` moved to
-  dev-deps; the request timeout is applied per-request since wasm
-  `ClientBuilder` has none). Remaining: the web `FileStore`/`MetaStore`
-  (OPFS/IndexedDB) and the wasm-bindgen façade, which will likely need
-  `?Send` on the store traits (the wasm futures aren't `Send`). See
-  `calendar/PLAN.md` Phase 1.
+- **Web client (wasm).** `client-web` is a wasm-only crate: `OpfsFileStore` +
+  `OpfsMetaStore` over OPFS, a `wasm-bindgen` façade (`init` + `WebSync`), and
+  `?Send` on the store traits (wasm futures wrap `JsFuture` = `Rc<RefCell<_>>`).
+  Unit-tested in headless Firefox (`wasm-pack test --headless --firefox`), and
+  an e2e test (`tests/e2e.rs`, `--features e2e`) round-trips push/pull/delete
+  through a real hub + CouchDB via `scripts/e2e-web.sh` (needs geckodriver).
+  The hub now serves `CorsLayer::permissive()` (TODO: tighten). Deferred:
+  metadata is OPFS-backed, not IndexedDB, and the Tuta fork + shim are next.
+  See `calendar/PLAN.md`.
 - **Checkpoint identity.** A hub's checkpoint is keyed by its base URL, so a
   hub whose URL changes mid-life restarts from a full pull (safe, just
   slower). Fine at this scale.
