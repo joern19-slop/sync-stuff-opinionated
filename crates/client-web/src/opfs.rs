@@ -52,8 +52,15 @@ struct OpfsRoot {
 
 impl OpfsRoot {
   async fn open() -> Result<Self, StoreError> {
-    let window = web_sys::window().ok_or_else(|| StoreError::Io("no window".into()))?;
-    let storage = window.navigator().storage();
+    // `navigator.storage.getDirectory()` exists on both Window and
+    // WorkerGlobalScope. Use the global scope (not `web_sys::window()`, which
+    // is `None` in a Web Worker) so the store works in the worker too.
+    let global = js_sys::global();
+    let navigator =
+      Reflect::get(&global, &wasm_bindgen::JsValue::from_str("navigator")).map_err(js_err)?;
+    let storage = Reflect::get(&navigator, &wasm_bindgen::JsValue::from_str("storage"))
+      .map_err(js_err)?;
+    let storage: web_sys::StorageManager = storage.dyn_into().map_err(js_err)?;
     let handle: FileSystemDirectoryHandle = await_promise(storage.get_directory()).await?;
     Ok(Self { handle })
   }
