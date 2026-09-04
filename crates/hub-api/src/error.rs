@@ -14,9 +14,10 @@ impl From<CouchError> for ApiError {
   fn from(e: CouchError) -> Self {
     match &e {
       CouchError::RevConflict(_) => ApiError(StatusCode::CONFLICT, e.to_string()),
-      CouchError::Transport(_) | CouchError::Api { .. } | CouchError::Decode(_) => {
-        ApiError(StatusCode::BAD_GATEWAY, e.to_string())
-      }
+      CouchError::Transport(_)
+      | CouchError::Api { .. }
+      | CouchError::Decode(_)
+      | CouchError::BadUrl(_) => ApiError(StatusCode::BAD_GATEWAY, e.to_string()),
     }
   }
 }

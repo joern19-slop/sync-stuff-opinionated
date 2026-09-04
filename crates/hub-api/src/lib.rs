@@ -21,7 +21,7 @@ use state::AppState;
 /// checker are spawned by `run()`, so HTTP-only tests can use this without
 /// inheriting a background thread that polls their mock CouchDB.
 pub async fn build_app(cfg: &Config) -> anyhow::Result<axum::Router> {
-  let couch = couch_client(cfg);
+  let couch = couch_client(cfg)?;
   couch.ensure_db().await?;
 
   let state = Arc::new(AppState {
@@ -35,7 +35,7 @@ pub async fn build_app(cfg: &Config) -> anyhow::Result<axum::Router> {
 /// Canonical startup: build the app *and* spawn the Stage 3 background tasks
 /// (change watcher -> FCM, replication health -> Discord), then serve.
 pub async fn run(cfg: &Config) -> anyhow::Result<()> {
-  let couch = couch_client(cfg);
+  let couch = couch_client(cfg)?;
   couch.ensure_db().await?;
 
   let state = Arc::new(AppState {
@@ -53,7 +53,7 @@ pub async fn run(cfg: &Config) -> anyhow::Result<()> {
   Ok(())
 }
 
-fn couch_client(cfg: &Config) -> CouchClient {
+fn couch_client(cfg: &Config) -> Result<CouchClient, sync_core::CouchError> {
   CouchClient::new(
     &cfg.couch_url,
     &cfg.couch_db,

@@ -8,6 +8,9 @@ pub enum CouchError {
   #[error("couchdb returned {status}: {body}")]
   Api { status: u16, body: String },
 
+  #[error("invalid url: {0}")]
+  BadUrl(String),
+
   #[error("revision conflict writing {0}")]
   RevConflict(String),
 

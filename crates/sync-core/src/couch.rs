@@ -10,11 +10,12 @@ use bytes::Bytes;
 use reqwest::{Client, Method, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
+use url::Url;
 
 #[derive(Clone)]
 pub struct CouchClient {
   http: Client,
-  base_url: String,
+  base: Url,
   db: String,
   user: String,
   pass: String,
@@ -90,27 +91,43 @@ impl CouchClient {
     db: impl Into<String>,
     user: impl Into<String>,
     pass: impl Into<String>,
-  ) -> Self {
-    Self {
+  ) -> Result<Self, CouchError> {
+    let base = Url::parse(&base_url.into()).map_err(|e| CouchError::BadUrl(e.to_string()))?;
+    Ok(Self {
       http: Client::new(),
-      base_url: base_url.into(),
+      base,
       db: db.into(),
       user: user.into(),
       pass: pass.into(),
+    })
+  }
+
+  fn db_url(&self) -> Result<Url, CouchError> {
+    self.append(&self.base, &[&self.db])
+  }
+
+  /// The document's URL: the doc id (which may contain `/`) is pushed as a
+  /// single percent-encoded path segment, so a file path like `notes/a.txt`
+  /// addresses one CouchDB doc, not a sub-path.
+  fn doc_url(&self, id: &str) -> Result<Url, CouchError> {
+    self.append(&self.db_url()?, &[id])
+  }
+
+  /// Clones `url` and appends each segment, percent-encoding as needed.
+  fn append(&self, url: &Url, segments: &[&str]) -> Result<Url, CouchError> {
+    let mut url = url.clone();
+    {
+      let mut path = url
+        .path_segments_mut()
+        .map_err(|_| CouchError::BadUrl("url cannot be a base".to_string()))?;
+      for segment in segments {
+        path.push(segment);
+      }
     }
+    Ok(url)
   }
 
-  fn db_url(&self) -> String {
-    format!("{}/{}", self.base_url.trim_end_matches('/'), self.db)
-  }
-
-  /// Percent-encode the whole document id (including any `/`) so a file
-  /// path like `notes/a.txt` addresses one CouchDB doc, not a sub-path.
-  fn doc_url(&self, id: &str) -> String {
-    format!("{}/{}", self.db_url(), urlencoding::encode(id))
-  }
-
-  fn req(&self, method: Method, url: &str) -> reqwest::RequestBuilder {
+  fn req(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
     self
       .http
       .request(method, url)
@@ -119,7 +136,7 @@ impl CouchClient {
 
   /// Idempotent: succeeds whether or not the db already existed.
   pub async fn ensure_db(&self) -> Result<(), CouchError> {
-    let resp = self.req(Method::PUT, &self.db_url()).send().await?;
+    let resp = self.req(Method::PUT, self.db_url()?).send().await?;
     match resp.status() {
       StatusCode::CREATED | StatusCode::PRECONDITION_FAILED => Ok(()),
       status => Err(Self::api_err(status, resp).await),
@@ -129,8 +146,8 @@ impl CouchClient {
   /// Node-level replication jobs via `GET /_scheduler/jobs`. Note this is
   /// *not* scoped to `self.db` - the scheduler is a node-wide concept.
   pub async fn replication_jobs(&self) -> Result<Vec<SchedulerJob>, CouchError> {
-    let url = format!("{}/_scheduler/jobs", self.base_url.trim_end_matches('/'));
-    let resp = self.req(Method::GET, &url).send().await?;
+    let url = self.append(&self.base, &["_scheduler", "jobs"])?;
+    let resp = self.req(Method::GET, url).send().await?;
     #[derive(Deserialize)]
     struct JobsResponse {
       #[serde(default)]
@@ -153,16 +170,17 @@ impl CouchClient {
     since: Option<&str>,
     timeout_secs: u64,
   ) -> Result<RawChangesResponse, CouchError> {
-    let mut url = format!(
-      "{}/_changes?style=all_docs&feed=longpoll&timeout={}",
-      self.db_url(),
-      timeout_secs
-    );
-    if let Some(s) = since {
-      url.push_str("&since=");
-      url.push_str(&urlencoding::encode(s));
+    let mut url = self.append(&self.db_url()?, &["_changes"])?;
+    {
+      let mut query = url.query_pairs_mut();
+      query.append_pair("style", "all_docs");
+      query.append_pair("feed", "longpoll");
+      query.append_pair("timeout", &timeout_secs.to_string());
+      if let Some(s) = since {
+        query.append_pair("since", s);
+      }
     }
-    let resp = self.req(Method::GET, &url).send().await?;
+    let resp = self.req(Method::GET, url).send().await?;
     Self::json_or_err(resp).await
   }
 
@@ -181,15 +199,19 @@ impl CouchClient {
     since: Option<&str>,
     with_docs: bool,
   ) -> Result<RawChangesResponse, CouchError> {
-    let mut url = format!("{}/_changes?style=all_docs", self.db_url());
-    if with_docs {
-      url.push_str("&include_docs=true&conflicts=true");
+    let mut url = self.append(&self.db_url()?, &["_changes"])?;
+    {
+      let mut query = url.query_pairs_mut();
+      query.append_pair("style", "all_docs");
+      if with_docs {
+        query.append_pair("include_docs", "true");
+        query.append_pair("conflicts", "true");
+      }
+      if let Some(s) = since {
+        query.append_pair("since", s);
+      }
     }
-    if let Some(s) = since {
-      url.push_str("&since=");
-      url.push_str(&urlencoding::encode(s));
-    }
-    let resp = self.req(Method::GET, &url).send().await?;
+    let resp = self.req(Method::GET, url).send().await?;
     Self::json_or_err(resp).await
   }
 
@@ -198,8 +220,9 @@ impl CouchClient {
   /// Requested with `conflicts=true` so a conflicted doc carries its
   /// `_conflicts` list; callers that don't care can ignore it.
   pub async fn get_doc(&self, id: &str) -> Result<Option<serde_json::Value>, CouchError> {
-    let url = format!("{}?conflicts=true", self.doc_url(id));
-    let resp = self.req(Method::GET, &url).send().await?;
+    let mut url = self.doc_url(id)?;
+    url.query_pairs_mut().append_pair("conflicts", "true");
+    let resp = self.req(Method::GET, url).send().await?;
     if resp.status() == StatusCode::NOT_FOUND {
       return Ok(None);
     }
@@ -215,12 +238,13 @@ impl CouchClient {
     id: &str,
     rev: &str,
   ) -> Result<Option<serde_json::Value>, CouchError> {
-    let url = format!(
-      "{}?rev={}&revs=true",
-      self.doc_url(id),
-      urlencoding::encode(rev)
-    );
-    let resp = self.req(Method::GET, &url).send().await?;
+    let mut url = self.doc_url(id)?;
+    {
+      let mut query = url.query_pairs_mut();
+      query.append_pair("rev", rev);
+      query.append_pair("revs", "true");
+    }
+    let resp = self.req(Method::GET, url).send().await?;
     if resp.status() == StatusCode::NOT_FOUND {
       return Ok(None);
     }
@@ -241,12 +265,11 @@ impl CouchClient {
     attachment: &str,
     rev: Option<&str>,
   ) -> Result<Bytes, CouchError> {
-    let mut url = format!("{}/{}", self.doc_url(id), attachment);
+    let mut url = self.append(&self.doc_url(id)?, &[attachment])?;
     if let Some(r) = rev {
-      url.push_str("?rev=");
-      url.push_str(&urlencoding::encode(r));
+      url.query_pairs_mut().append_pair("rev", r);
     }
-    let resp = self.req(Method::GET, &url).send().await?;
+    let resp = self.req(Method::GET, url).send().await?;
     if !resp.status().is_success() {
       return Err(Self::api_err(resp.status(), resp).await);
     }
@@ -259,8 +282,13 @@ impl CouchClient {
   /// the winning revision - the normal `get_doc` returns 404 in that case
   /// and the `_changes` feed reports it as a plain `deleted`.
   pub async fn get_doc_leaves(&self, id: &str) -> Result<Vec<serde_json::Value>, CouchError> {
-    let url = format!("{}?open_revs=all&revs=true", self.doc_url(id));
-    let resp = self.req(Method::GET, &url).send().await?;
+    let mut url = self.doc_url(id)?;
+    {
+      let mut query = url.query_pairs_mut();
+      query.append_pair("open_revs", "all");
+      query.append_pair("revs", "true");
+    }
+    let resp = self.req(Method::GET, url).send().await?;
     if resp.status() == StatusCode::NOT_FOUND {
       return Ok(vec![]);
     }
@@ -293,7 +321,7 @@ impl CouchClient {
       body["_rev"] = json!(r);
     }
     let resp = self
-      .req(Method::PUT, &self.doc_url(id))
+      .req(Method::PUT, self.doc_url(id)?)
       .json(&body)
       .send()
       .await?;
@@ -312,13 +340,10 @@ impl CouchClient {
     content_type: &str,
     bytes: Bytes,
   ) -> Result<PutResult, CouchError> {
-    let url = format!(
-      "{}/content?rev={}",
-      self.doc_url(id),
-      urlencoding::encode(rev)
-    );
+    let mut url = self.append(&self.doc_url(id)?, &["content"])?;
+    url.query_pairs_mut().append_pair("rev", rev);
     let resp = self
-      .req(Method::PUT, &url)
+      .req(Method::PUT, url)
       .header("Content-Type", content_type)
       .body(bytes)
       .send()
@@ -327,8 +352,9 @@ impl CouchClient {
   }
 
   pub async fn delete_doc(&self, id: &str, rev: &str) -> Result<PutResult, CouchError> {
-    let url = format!("{}?rev={}", self.doc_url(id), urlencoding::encode(rev));
-    let resp = self.req(Method::DELETE, &url).send().await?;
+    let mut url = self.doc_url(id)?;
+    url.query_pairs_mut().append_pair("rev", rev);
+    let resp = self.req(Method::DELETE, url).send().await?;
     Self::put_result(resp, id).await
   }
 
@@ -341,9 +367,9 @@ impl CouchClient {
   /// A per-doc `conflict` result means that exact revision already exists,
   /// which the caller treats as "branch already present" (idempotent retry).
   pub async fn put_revision(&self, doc: serde_json::Value) -> Result<(), CouchError> {
-    let url = format!("{}/_bulk_docs", self.db_url());
+    let url = self.append(&self.db_url()?, &["_bulk_docs"])?;
     let resp = self
-      .req(Method::POST, &url)
+      .req(Method::POST, url)
       .json(&json!({ "new_edits": false, "docs": [doc] }))
       .send()
       .await?;
@@ -431,7 +457,7 @@ mod tests {
   use wiremock::{Mock, MockServer, ResponseTemplate};
 
   async fn client(server: &MockServer) -> CouchClient {
-    CouchClient::new(server.uri(), "filesync", "hub", "hub-pass")
+    CouchClient::new(server.uri(), "filesync", "hub", "hub-pass").unwrap()
   }
 
   #[tokio::test]

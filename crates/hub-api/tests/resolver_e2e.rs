@@ -34,7 +34,7 @@ async fn start_couch() -> (
   let port = couch.get_host_port_ipv4(5984).await.expect("couch port");
   let url = format!("http://127.0.0.1:{port}");
 
-  let client = CouchClient::new(&url, DB, USER, PASS);
+  let client = CouchClient::new(&url, DB, USER, PASS).expect("couch client");
   client.ensure_db().await.expect("ensure db");
 
   let http = reqwest::Client::new();
