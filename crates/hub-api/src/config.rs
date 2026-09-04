@@ -1,5 +1,9 @@
 use std::collections::HashSet;
 
+use anyhow::Result;
+
+use common::env;
+
 /// All hub configuration comes from the environment so the same binary
 /// works unmodified in docker-compose, a systemd unit, or a test harness.
 #[derive(Debug, Clone)]
@@ -12,7 +16,8 @@ pub struct Config {
   /// Shared bearer tokens, one (or more) per authorized device. Any token
   /// in this set is accepted for every route - there is no per-device
   /// scoping yet, only per-device *provisioning* (each device gets a
-  /// distinct token so it can be revoked individually).
+  /// distinct token so it can be revoked individually). Required: with no
+  /// tokens the hub would silently reject every request.
   pub device_tokens: HashSet<String>,
   /// FCM server key (legacy HTTP API). When set, the change watcher wakes
   /// devices via FCM. See `notify::FcmClient` for the HTTP-v1 migration
@@ -38,44 +43,21 @@ pub struct Config {
 }
 
 impl Config {
-  pub fn from_env() -> Self {
-    Self {
-      bind_addr: env_or("HUB_BIND_ADDR", "0.0.0.0:8080"),
-      couch_url: env_or("COUCH_URL", "http://localhost:5984"),
-      couch_db: env_or("COUCH_DB", "filesync"),
-      couch_user: env_or("COUCH_USER", "hub"),
-      couch_password: env_or("COUCH_PASSWORD", "hub-password"),
-      device_tokens: comma_list("HUB_DEVICE_TOKENS").into_iter().collect(),
-      fcm_server_key: std::env::var("FCM_SERVER_KEY")
-        .ok()
-        .filter(|s| !s.is_empty()),
-      fcm_device_tokens: comma_list("HUB_FCM_TOKENS"),
-      discord_webhook_url: std::env::var("DISCORD_WEBHOOK_URL")
-        .ok()
-        .filter(|s| !s.is_empty()),
-      watcher_poll_secs: env_u64("HUB_WATCHER_POLL_SECS", 2),
-      repl_staleness_secs: env_u64("HUB_REPL_STALENESS_SECS", 300),
-    }
+  pub fn from_env() -> Result<Self> {
+    Ok(Self {
+      bind_addr: env::string_or("HUB_BIND_ADDR", "0.0.0.0:8080"),
+      couch_url: env::string_or("COUCH_URL", "http://localhost:5984"),
+      couch_db: env::string_or("COUCH_DB", "filesync"),
+      couch_user: env::string_or("COUCH_USER", "hub"),
+      couch_password: env::string_or("COUCH_PASSWORD", "hub-password"),
+      device_tokens: env::list_required("HUB_DEVICE_TOKENS")?
+        .into_iter()
+        .collect(),
+      fcm_server_key: env::optional("FCM_SERVER_KEY"),
+      fcm_device_tokens: env::list_optional("HUB_FCM_TOKENS").unwrap_or_default(),
+      discord_webhook_url: env::optional("DISCORD_WEBHOOK_URL"),
+      watcher_poll_secs: env::u64_or("HUB_WATCHER_POLL_SECS", 2)?,
+      repl_staleness_secs: env::u64_or("HUB_REPL_STALENESS_SECS", 300)?,
+    })
   }
-}
-
-fn comma_list(key: &str) -> Vec<String> {
-  std::env::var(key)
-    .unwrap_or_default()
-    .split(',')
-    .map(str::trim)
-    .filter(|s| !s.is_empty())
-    .map(str::to_string)
-    .collect()
-}
-
-fn env_or(key: &str, default: &str) -> String {
-  std::env::var(key).unwrap_or_else(|_| default.to_string())
-}
-
-fn env_u64(key: &str, default: u64) -> u64 {
-  std::env::var(key)
-    .ok()
-    .and_then(|v| v.parse().ok())
-    .unwrap_or(default)
 }

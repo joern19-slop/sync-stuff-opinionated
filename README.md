@@ -54,6 +54,7 @@ wiring for mobile - all deferred pending those concrete client targets. See
 ```
 Cargo.toml                 workspace
 crates/protocol-types/      wire types for the Hub Sync API (shared by hub + clients)
+crates/common/               shared HTTP client (timeouts) + strict env parsing
 crates/hub-api/             axum service: Hub Sync API + CouchDB client + diff3 + resolver
 crates/client-core/         client sync engine + MetaStore/FileStore traits (Stage 4/7)
 crates/client-desktop/      headless inotify client (the first concrete client)
@@ -152,7 +153,7 @@ cargo test --test api_unit                                    # in hub-api (no -
 | `COUCH_URL` | `http://localhost:5984` | CouchDB base URL |
 | `COUCH_DB` | `filesync` | database name |
 | `COUCH_USER` / `COUCH_PASSWORD` | `hub` / `hub-password` | CouchDB creds |
-| `HUB_DEVICE_TOKENS` | *(empty)* | comma-separated bearer tokens; one per device |
+| `HUB_DEVICE_TOKENS` | *(required)* | comma-separated bearer tokens; one per device |
 | `FCM_SERVER_KEY` | *(unset)* | legacy FCM server key; enables device wakeups |
 | `HUB_FCM_TOKENS` | *(empty)* | comma-separated FCM registration tokens to wake |
 | `DISCORD_WEBHOOK_URL` | *(unset)* | enables hub-to-hub replication alerts |

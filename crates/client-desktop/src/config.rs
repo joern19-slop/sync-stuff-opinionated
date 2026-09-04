@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
+
+use common::env;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -21,29 +23,16 @@ pub struct Config {
 
 impl Config {
   pub fn from_env() -> Result<Self> {
-    let hubs: Vec<String> = require("FILESYNC_HUBS")?
-      .split(',')
-      .map(str::trim)
-      .filter(|s| !s.is_empty())
-      .map(str::to_string)
-      .collect();
-    if hubs.is_empty() {
-      bail!("FILESYNC_HUBS must list at least one hub URL");
-    }
+    let hubs = env::list_required("FILESYNC_HUBS")?;
+    let token = env::required("FILESYNC_TOKEN")?;
+    let dir = PathBuf::from(env::required("FILESYNC_DIR")?);
 
-    let token = require("FILESYNC_TOKEN")?;
-    let dir = PathBuf::from(require("FILESYNC_DIR")?);
-
-    let state_dir = match std::env::var("FILESYNC_STATE_DIR").ok() {
+    let state_dir = match env::optional("FILESYNC_STATE_DIR") {
       Some(p) => PathBuf::from(p),
       None => default_state_dir(),
     };
 
-    let debounce_ms: u64 = std::env::var("FILESYNC_DEBOUNCE_MS")
-      .ok()
-      .map(|v| v.parse().context("FILESYNC_DEBOUNCE_MS must be an integer"))
-      .transpose()?
-      .unwrap_or(1000);
+    let debounce_ms = env::u64_or("FILESYNC_DEBOUNCE_MS", 1000)?;
     let debounce = Duration::from_millis(debounce_ms);
 
     Ok(Self {
@@ -54,10 +43,6 @@ impl Config {
       debounce,
     })
   }
-}
-
-fn require(name: &str) -> Result<String> {
-  std::env::var(name).with_context(|| format!("missing required env var {name}"))
 }
 
 fn default_state_dir() -> PathBuf {

@@ -105,6 +105,8 @@ fn scan_dir(root: &Path, dir: &Path, out: &mut HashMap<String, i64>) -> Result<(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
       out.insert(rel.to_string(), mtime);
+    } else if file_type.is_symlink() {
+      warn!(path = %path.display(), "skipping symlink");
     }
   }
   Ok(())

@@ -13,10 +13,25 @@ types *and* a pile of hub-only CouchDB plumbing. It's now:
 
 - `protocol-types` - only the Hub Sync API wire structs + serde (shared by
   `hub-api` and `client-core`).
+- `common` - shared HTTP client (`http_client()`: connect + request timeouts,
+  a User-Agent) and strict env parsing (`env::{required, optional, string_or,
+  u64_or, list_optional, list_required}`). Both apps use it; a bad/missing
+  value now fails loudly instead of silently defaulting.
 - `hub-api` - gained the CouchDB client (`couch.rs`), `diff3.rs`, and
   `CouchError` as private modules; the Stage 1 `replication_e2e` test moved
   here too.
 - `client-core` / `client-desktop` - unchanged responsibilities.
+
+## Shared HTTP client + strict config
+
+- `common::http_client()` sets a 10s connect timeout and a 30s default request
+  timeout on every hub/client request, so a black-holed peer can't hang sync
+  forever. The client's long-poll overrides per-request to 65s (the hub holds
+  up to 60s).
+- `HUB_DEVICE_TOKENS` is now **required** - the hub refuses to start with no
+  device tokens instead of silently rejecting every request. Both the hub and
+  the desktop config now fail on a bad integer rather than falling back to the
+  default.
 
 ## Device token provisioning (per your decision)
 
@@ -162,6 +177,12 @@ hub's control).
   bytes are still in the editor (not lost from the *sync* layer), but it's a
   real footgun. Mitigations (not done): write in place when content is
   unchanged, or hold off pulling a path with a known open handle.
+
+- **Symlinks & non-UTF-8 names.** Both are skipped, but now logged (`warn!`)
+  rather than silently ignored: the sync model is byte content over UTF-8
+  paths, and following symlinks risks escaping the sync root or cycling.
+  Supporting either is possible (follow in-root file symlinks; base64-encode
+  non-UTF-8 names with a marker) but deferred until there's a real need.
 
 ## Hub -> client wake (desktop): long-poll
 

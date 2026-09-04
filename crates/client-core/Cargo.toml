@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 protocol-types = { path = "../protocol-types" }
+common = { path = "../common" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

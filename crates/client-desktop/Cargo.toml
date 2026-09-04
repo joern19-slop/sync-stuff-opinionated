@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 client-core = { path = "../client-core" }
+common = { path = "../common" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

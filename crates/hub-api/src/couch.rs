@@ -94,7 +94,7 @@ impl CouchClient {
   ) -> Result<Self, CouchError> {
     let base = Url::parse(&base_url.into()).map_err(|e| CouchError::BadUrl(e.to_string()))?;
     Ok(Self {
-      http: Client::new(),
+      http: common::http_client(),
       base,
       db: db.into(),
       user: user.into(),

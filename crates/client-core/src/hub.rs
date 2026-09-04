@@ -6,8 +6,14 @@
 //! top by the sync engine, which owns per-hub checkpoints (a CouchDB `seq`
 //! is node-local, so it must be scoped to the hub that issued it).
 
+use std::time::Duration;
+
 use protocol_types::{ChangesResponse, PushChange, PushResult};
 use thiserror::Error;
+
+/// The HTTP request timeout for a long-poll: it must outlast the hub's hold
+/// (up to 60s), with margin.
+const LONGPOLL_REQUEST_TIMEOUT: Duration = Duration::from_secs(65);
 
 #[derive(Debug, Error)]
 pub enum HubError {
@@ -38,7 +44,7 @@ pub struct HubClient {
 impl HubClient {
   pub fn new(base_url: impl Into<String>, device_token: impl Into<String>) -> Self {
     Self {
-      http: reqwest::Client::new(),
+      http: common::http_client(),
       base_url: base_url.into(),
       device_token: device_token.into(),
     }
@@ -86,6 +92,7 @@ impl HubClient {
       .http
       .get(&url)
       .bearer_auth(&self.device_token)
+      .timeout(LONGPOLL_REQUEST_TIMEOUT)
       .send()
       .await?;
     Self::json_or_err(resp).await
