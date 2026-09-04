@@ -77,6 +77,11 @@ three Tuta-side blockers from the notes map to:
 - **Where translation lives**: the Tuta-side `EntityRestInterface` does the
   `CalendarEvent ↔ .ics` parse/serialize (via `ical.js`); the WASM engine stays
   calendar-agnostic — it just syncs `.ics` bytes like any other file.
+  - **Correction**: don't use `ical.js` — Tuta already ships a full iCalendar
+    parser/serializer for its import/export feature:
+    `calendar/export/CalendarParser.ts` (`parseCalendarStringData` /
+    `parseICalendar` / `parseRrule` / …) and `CalendarExporter.ts`
+    (`serializeEvent` / `serializeCalendar`). Reuse those.
 
 ## Toolchain
 - `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`)
