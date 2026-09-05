@@ -1,6 +1,6 @@
 # Web Calendar — Status & Handoff
 
-Last updated: end of session (everything below is committed/pushed).
+Last updated: login bypass implemented (builds + typechecks green; not yet committed).
 
 ## What's done
 
@@ -36,37 +36,58 @@ The whole "swap Tuta's backend for filesync" is wired and **builds green**
    - `RollupConfig.js` — `calendar/export` → `date` chunk, `worker` may import
      `date`, `EnumUtils` → `common`, `filesync/` → `worker`.
 
-## Remaining: the login bypass
+## The login bypass (done)
 
-The backend is wired, but the app still boots into the **login page**. This is
-the last real chunk. Findings:
+The app now boots straight into the calendar — no Tuta login page, no Tuta
+server. The seam is a fabricated single-user "world" shared by both threads:
 
-- Routing: `src/applications/calendar-app/calendar-app.ts:550`
-  `if (requireLogin && !logins.isUserLoggedIn())` → login; `:553` redirects away
-  from login when logged in.
-- `LoginController.isUserLoggedIn()` (`.../api/main/LoginController.ts:198`)
-  returns `this.userController != null`; `getUserController()` asserts it.
-- `userController` is set during login: `this.userController = await initUserController(initData)`
-  (`LoginController.ts:105`); `initUserController` (`.../api/main/UserController.ts:397`)
-  loads a big graph from the server.
-- `UserController` ctor needs: `user: User`, `userGroupInfo: GroupInfo`,
-  `sessionId`, `props: TutanotaProperties`, `accessToken`, `userSettingsGroupRoot`,
-  `sessionType`, `loginUsername`, `entityClient`, `serviceExecutor`, `customer`.
+- `src/applications/calendar-app/filesync/world.ts` (`@bundleInto:common`)
+  builds a fixed set of entities with stable ids (`filesync-user`,
+  `filesync-user-group`, `filesync-calendar-group`, `filesync-customer`, ...):
+  `User` (FREE account, user+mail+calendar memberships), `GroupInfo`/`Group`
+  for the user and calendar groups, `CalendarGroupRoot`, `MailboxGroupRoot`,
+  `TutanotaProperties`, `UserSettingsGroupRoot`, `Customer`/`CustomerInfo`
+  (`plan = Free` so `isNewPaidPlan()` is false).
+- **Main thread** (`calendarLocator.ts: filesyncLogin()`): fabricates a
+  `UserController` and calls `LoginController.filesyncLogin()`, which sets it
+  and runs the post-login actions directly. The heavy `PostLoginActions`
+  (mailbox init / usage tests / news / approval checks — all server calls) is
+  no longer registered; only `setupCalendarModels` remains.
+- **Worker thread** (`CalendarWorkerLocator.initLocator`): after
+  `createBaseLocator`, seeds `locator.base.user` (the `UserFacade`) with
+  `setAccessToken` + `setUser(world.user)` so facades like `CalendarFacade`
+  can read the logged-in user.
+- `FilesyncEntityRestCache` now serves those infra entities from `load()` (and
+  `loadRange`/`loadMultiple` return empty for the rest), and throws
+  `NotFoundError` for unknown types so the various `.catch(ofClass(NotFoundError))`
+  paths behave like the real client. Calendar events still come from the wasm
+  `.ics` files.
+- Routing: the root `/` resolver redirects to `/calendar` instead of forcing
+  login.
 
-Two approaches (unpick tomorrow):
+Verified: `bun run calendar:types` and `node webapp prod --app calendar
+--disable-minify` are both green.
 
-- **A — fabricate a minimal `UserController`** and set `logins.userController`
-  directly (skip `initUserController`). Need to `create` the `User`,
-  `GroupInfo`/`UserGroupInfo`, `TutanotaProperties`, `UserSettingsGroupRoot`
-  entities with the fields the ~19 `getUserController()` consumers read
-  (timezone, `alarmInfoList`, `userGroupInfo`, calendar group). Medium-large.
-- **B — stub `LoginController`** so `isUserLoggedIn()` returns true and
-  `getUserController()` returns a hand-built `UserController`. Same fabrication
-  work, different seam.
+## Smoke-tested end-to-end (working)
 
-Whichever: the calendar also needs a `CalendarGroupRoot` (we already return a
-hardcoded one from the cache), and likely a `UserAlarmInfo` list (alarms are
-stubbed out for now).
+Ran the real stack (CouchDB via podman + `hub-api` on `:8080` + the served
+`build-calendar-app/` on `:9000`) and drove it with headless Firefox. The
+calendar boots into `/calendar/month/...` and renders events pulled from the
+hub. This surfaced two bugs that are now fixed:
+
+- **No initial sync.** `WebSync` (client-web wasm) only builds the engine; it
+  needs an explicit `sync()` to pull. `wasm.ts: initFilesync()` now does an
+  initial `sync()` (error-tolerant) after creating the engine.
+- **`_ownerGroup` was unset.** `FilesyncEntityRestCache.loadAllEvents` assigned
+  the event id but not `_ownerGroup`; `shouldDisplayEvent` asserts it, so
+  events silently failed to render. Now set from the group root.
+- **List-id filtering.** `loadRange`/`loadMultiple` now filter `CalendarEvent`
+  by the requested list id (short vs long) instead of returning everything for
+  both lists.
+
+The serving setup used `index.html` (Browser mode, no CSP), not
+`index-app.html` (App mode, has a `connect-src` CSP that would block the hub).
+Hub CORS is already `CorsLayer::permissive()`.
 
 ## Build / run (reproducible)
 
@@ -101,9 +122,18 @@ Type-check only: `bun run calendar:types`.
 
 ## Next steps
 
-1. Login bypass (A or B above) → app boots straight into the calendar.
-2. Serve `build-calendar-app/` and smoke-test against a live hub + CouchDB.
-3. Wire the long-poll trigger (currently `onEntityUpdatesReceived` is a no-op;
-   drive re-loads off the `WebSync.sync()`).
-4. Clean up: alarms/reminders (deferred), per-calendar (not hardcoded `default`),
-   the release-HTML entry point.
+1. **Live updates / long-poll.** `onEntityUpdatesReceived` is still a no-op and
+   the only sync is the initial one in `initFilesync`. Wire a long-poll (or
+   poll) loop that calls `WebSync.sync()` and re-emits updates so remote
+   changes appear without a reload, and feed `SyncTracker` (which
+   `calendarEventUpdateCoordinator.init()` currently blocks on via
+   `waitSync()`).
+2. **Range filtering.** `loadRange` returns all events and `loadReverseRangeBetween`
+   only enforces the lower id bound, so events leak past the upper bound and
+   are re-added across adjacent month loads (harmless visually, but not
+   correct). Filter/sort by element id in `loadRange` to fix pagination.
+3. **Event create/edit via the UI** (`CalendarFacade` path + alarms) — currently
+   reads render, writes are untested.
+4. **Clean up**: alarms/reminders (deferred), per-calendar (not hardcoded
+   `default`), the stale document title / "Offline" indicator (both from
+   skipping `PostLoginActions` + the websocket).
