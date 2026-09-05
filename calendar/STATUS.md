@@ -96,6 +96,10 @@ hub. This surfaced two bugs that are now fixed:
   work. Creating an event through the UI round-trips: `CalendarFacade` → cache
   `setup` → wasm `put_file` → hub, with correct timezone/`.ics` serialization
   (verified end-to-end). Edit/delete reuse the same `saveEvent`/`erase` seam.
+- **Sync + indicator cleanup.** After the first successful pull the worker marks
+  `SyncTracker` `OnlineSyncDone` (unblocking `waitSync()`) and reports the
+  websocket as `connected` so the header doesn't show a misleading
+  "Offline/Reconnecting"; `filesyncLogin` sets `document.title` to "Calendar".
 
 The serving setup used `index.html` (Browser mode, no CSP), not
 `index-app.html` (App mode, has a `connect-src` CSP that would block the hub).
@@ -134,10 +138,9 @@ Type-check only: `bun run calendar:types`.
 
 ## Next steps
 
-1. **Feed `SyncTracker`.** The poll loop doesn't advance sync status, so
-   `calendarEventUpdateCoordinator.init()` still hangs on `syncTracker.waitSync()`
-   (harmless, but untied). Set `OnlineSyncDone` after the first successful poll.
-2. **Clean up**: alarms/reminders (deferred), per-calendar (not hardcoded
-   `default`), the stale document title / "Offline" indicator (both from
-   skipping `PostLoginActions` + the websocket), replace the 5s poll with a
-   `GET /changes/longpoll` once the wasm exposes it.
+1. **Alarms/reminders** (deferred — events render/create with empty alarm lists).
+2. **Per-calendar** — still hardcoded: the `.ics` path is `calendars/default/` and
+   the world exposes one `filesync-calendar-group`; no UI to create/rename/switch
+   calendars.
+3. **Long-poll instead of 5s poll** once `client-web` exposes a long-poll/notify
+   signal (or the JS layer long-polls `GET /changes/longpoll` directly).
