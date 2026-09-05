@@ -84,6 +84,13 @@ hub. This surfaced two bugs that are now fixed:
 - **List-id filtering.** `loadRange`/`loadMultiple` now filter `CalendarEvent`
   by the requested list id (short vs long) instead of returning everything for
   both lists.
+- **Unstable event ids.** `assignEventId` uses a random day shift, so the same
+  event got a different id on every load and was re-added at month borders.
+  Replaced with a deterministic id (`createEventElementId(startTime, 0)`), which
+  also makes the id-range queries behave.
+- **Live updates.** `filesync/sync.ts` polls the hub every 5s, diffs the `.ics`
+  contents, and re-emits `CalendarEvent` entity updates through the event
+  controller — remote edits appear without a reload (verified).
 
 The serving setup used `index.html` (Browser mode, no CSP), not
 `index-app.html` (App mode, has a `connect-src` CSP that would block the hub).
@@ -122,18 +129,13 @@ Type-check only: `bun run calendar:types`.
 
 ## Next steps
 
-1. **Live updates / long-poll.** `onEntityUpdatesReceived` is still a no-op and
-   the only sync is the initial one in `initFilesync`. Wire a long-poll (or
-   poll) loop that calls `WebSync.sync()` and re-emits updates so remote
-   changes appear without a reload, and feed `SyncTracker` (which
-   `calendarEventUpdateCoordinator.init()` currently blocks on via
-   `waitSync()`).
-2. **Range filtering.** `loadRange` returns all events and `loadReverseRangeBetween`
-   only enforces the lower id bound, so events leak past the upper bound and
-   are re-added across adjacent month loads (harmless visually, but not
-   correct). Filter/sort by element id in `loadRange` to fix pagination.
-3. **Event create/edit via the UI** (`CalendarFacade` path + alarms) — currently
-   reads render, writes are untested.
-4. **Clean up**: alarms/reminders (deferred), per-calendar (not hardcoded
+1. **Event create/edit via the UI** (`CalendarFacade` path + alarms) — currently
+   reads render, writes are untested. The wasm `put_file`/`delete_file` already
+   queue pushes, so the seam is `CalendarFacade.createCalendarEvent` et al.
+2. **Feed `SyncTracker`.** The poll loop doesn't advance sync status, so
+   `calendarEventUpdateCoordinator.init()` still hangs on `syncTracker.waitSync()`
+   (harmless, but untied). Set `OnlineSyncDone` after the first successful poll.
+3. **Clean up**: alarms/reminders (deferred), per-calendar (not hardcoded
    `default`), the stale document title / "Offline" indicator (both from
-   skipping `PostLoginActions` + the websocket).
+   skipping `PostLoginActions` + the websocket), replace the 5s poll with a
+   `GET /changes/longpoll` once the wasm exposes it.
