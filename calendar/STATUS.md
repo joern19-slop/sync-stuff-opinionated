@@ -91,6 +91,11 @@ hub. This surfaced two bugs that are now fixed:
 - **Live updates.** `filesync/sync.ts` polls the hub every 5s, diffs the `.ics`
   contents, and re-emits `CalendarEvent` entity updates through the event
   controller — remote edits appear without a reload (verified).
+- **Event create/edit.** Fabricated `MailBox` + `MailboxProperties` (and a dummy
+  `pushIdentifierList`) so `MailboxModel` and `CalendarFacade.createCalendarEvent`
+  work. Creating an event through the UI round-trips: `CalendarFacade` → cache
+  `setup` → wasm `put_file` → hub, with correct timezone/`.ics` serialization
+  (verified end-to-end). Edit/delete reuse the same `saveEvent`/`erase` seam.
 
 The serving setup used `index.html` (Browser mode, no CSP), not
 `index-app.html` (App mode, has a `connect-src` CSP that would block the hub).
@@ -129,13 +134,10 @@ Type-check only: `bun run calendar:types`.
 
 ## Next steps
 
-1. **Event create/edit via the UI** (`CalendarFacade` path + alarms) — currently
-   reads render, writes are untested. The wasm `put_file`/`delete_file` already
-   queue pushes, so the seam is `CalendarFacade.createCalendarEvent` et al.
-2. **Feed `SyncTracker`.** The poll loop doesn't advance sync status, so
+1. **Feed `SyncTracker`.** The poll loop doesn't advance sync status, so
    `calendarEventUpdateCoordinator.init()` still hangs on `syncTracker.waitSync()`
    (harmless, but untied). Set `OnlineSyncDone` after the first successful poll.
-3. **Clean up**: alarms/reminders (deferred), per-calendar (not hardcoded
+2. **Clean up**: alarms/reminders (deferred), per-calendar (not hardcoded
    `default`), the stale document title / "Offline" indicator (both from
    skipping `PostLoginActions` + the websocket), replace the 5s poll with a
    `GET /changes/longpoll` once the wasm exposes it.
