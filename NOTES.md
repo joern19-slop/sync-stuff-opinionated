@@ -129,7 +129,7 @@ hub's control).
 - `_replicator` must be created explicitly (fresh single-node installs don't
   create it), and `_replicator` docs reject local endpoints
   ("local_endpoints_not_supported") - both source and target are now full
-  URLs. `init-replication.sh` updated to match.
+  URLs. `replication_e2e.rs` updated to match.
 - testcontainers `ContainerAsync` removes the container on drop; the hub e2e
   helper had to hold it until the test body finishes.
 - `localhost` -> `127.0.0.1` (podman's IPv6 port-forwarding drops bodies).

@@ -3,8 +3,8 @@
 //! replication-health checker that reports hub-to-hub errors/staleness to a
 //! Discord webhook.
 //!
-//! These are *not* started by `build_app()`, so the HTTP-only unit tests
-//! don't inherit a background thread poking at their mock CouchDB.
+//! `build_app()` does *not* start these, so HTTP-only unit tests don't
+//! inherit a background thread poking at their mock CouchDB.
 
 use std::time::Duration;
 
@@ -14,10 +14,8 @@ use crate::config::Config;
 use crate::notify::{DiscordClient, FcmClient};
 use crate::resolver;
 
-/// Spawn the background tasks, returning their handles so the caller can
-/// hold or await them. The change watcher always runs (it does conflict
-/// resolution); FCM wakeups and Discord alerts are enabled only when their
-/// respective config is present.
+/// The change watcher always runs (it does conflict resolution); FCM
+/// wakeups and Discord alerts only when their config is present.
 pub fn spawn(couch: CouchClient, cfg: &Config) -> Vec<tokio::task::JoinHandle<()>> {
   let mut handles = Vec::new();
 
@@ -46,17 +44,10 @@ pub fn spawn(couch: CouchClient, cfg: &Config) -> Vec<tokio::task::JoinHandle<()
   handles
 }
 
-/// Long-polls CouchDB's `_changes` (with docs + conflicts) and, for each
-/// user-file change: resolves any conflict hub-side (Stage 5/6), then wakes
-/// all registered devices via FCM so they pull the outcome. Starts from
-/// `since=now` so startup does not replay the whole history as a burst of
-/// wakeups.
-///
-/// This is long-poll rather than `feed=continuous`: the two are
-/// functionally equivalent for "react to change", and long-polling reuses
-/// the already-tested `CouchClient::changes` instead of adding a streaming
-/// line-framing layer. Latency is bounded by `interval`; if sub-second
-/// wakeups ever matter, swap this loop for a true continuous feed.
+/// Resolves conflicts and wakes devices per change, then long-polls again.
+/// Starts from `since=now` so startup doesn't replay history as a burst of
+/// wakeups. Long-polling (not `feed=continuous`) reuses `CouchClient` and
+/// bounds latency by `interval`.
 async fn change_watcher(
   couch: CouchClient,
   fcm: Option<FcmClient>,
@@ -96,9 +87,8 @@ async fn change_watcher(
         since = seq_to_checkpoint(&resp.last_seq);
       }
       Err(e) => {
-        // Transient: CouchDB restarting, a network blip, etc. Keep
-        // polling from the same checkpoint - don't advance it, or we
-        // skip changes that land while we're down.
+        // Don't advance the checkpoint on error - changes landing while
+        // we're down would be skipped.
         tracing::error!(error = %e, since = %since, "changes poll failed");
       }
     }
@@ -107,7 +97,6 @@ async fn change_watcher(
   }
 }
 
-/// Whether a change row's winning doc is flagged as conflicted.
 fn has_conflict(doc: &Option<serde_json::Value>) -> bool {
   doc
     .as_ref()
@@ -116,8 +105,6 @@ fn has_conflict(doc: &Option<serde_json::Value>) -> bool {
     .is_some_and(|arr| !arr.is_empty())
 }
 
-/// Filters a `_changes` response down to the set of changed *user-file*
-/// paths, dropping CouchDB's own `_design`/system docs.
 fn changed_paths(resp: &RawChangesResponse) -> Vec<String> {
   resp
     .results
@@ -127,10 +114,8 @@ fn changed_paths(resp: &RawChangesResponse) -> Vec<String> {
     .collect()
 }
 
-/// Periodically inspects CouchDB's replication scheduler and reports to
-/// Discord when a job has errored or gone stale past `staleness_secs`.
-/// Client-offline detection is explicitly out of scope here - only what the
-/// hub itself can observe about its own replications is reported.
+/// Reports a job's error or staleness to Discord. Only what the hub itself
+/// can observe about its own replications is reported.
 async fn replication_health_checker(
   couch: CouchClient,
   discord: DiscordClient,
@@ -180,9 +165,8 @@ fn describe_problem(job: &SchedulerJob, staleness_secs: u64) -> Option<&'static 
   None
 }
 
-/// Parses an RFC3339 `last_updated` timestamp and reports whether it is older
-/// than `threshold_secs`. Unparseable timestamps are treated as *not* stale
-/// (better to miss a report than to spam Discord on a format change).
+/// Unparseable timestamps count as *not* stale - better to miss a report
+/// than to spam Discord on a format change.
 fn last_updated_stale(last_updated: &str, threshold_secs: u64) -> bool {
   use time::format_description::well_known::Rfc3339;
   use time::OffsetDateTime;
@@ -195,9 +179,6 @@ fn last_updated_stale(last_updated: &str, threshold_secs: u64) -> bool {
   elapsed.whole_seconds() > threshold_secs as i64
 }
 
-/// CouchDB's `_changes` `last_seq` can be a bare string or an
-/// `[n, string]` array depending on version/config. Both round-trip through
-/// `since=` unchanged, so serialize back to whatever `since` wants.
 fn seq_to_checkpoint(v: &serde_json::Value) -> String {
   match v {
     serde_json::Value::String(s) => s.clone(),

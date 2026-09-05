@@ -4,9 +4,9 @@ Reuse the **Tuta web calendar UI**, swap its persistence seam for the
 **filesync sync engine compiled to WASM**, storing each event as an **`.ics`
 file** over the Hub Sync API. Single user, no sharing/attendees first.
 
-Complements (and supersedes the Phase-2 sketch in `ArchitecturePlan.md`, which
-assumed a Radicale/CalDAV frontend): here the web client *is* the frontend, and
-filesync *is* the storage backend.
+Complements the file-sync stages in `ArchitecturePlan.md` (and supersedes the
+Radicale/CalDAV phase-2 sketch that used to live there): here the web client
+*is* the frontend, and filesync *is* the storage backend.
 
 ## Decisions locked in
 

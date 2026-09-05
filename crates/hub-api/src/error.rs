@@ -26,8 +26,6 @@ pub enum CouchError {
   Decode(String),
 }
 
-/// Every route error funnels through here so the HTTP surface is
-/// consistent even as the CouchDB-facing error cases grow.
 pub struct ApiError(pub StatusCode, pub String);
 
 impl From<CouchError> for ApiError {

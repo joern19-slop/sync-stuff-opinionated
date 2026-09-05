@@ -10,11 +10,8 @@
 //! wiring in particular, via `ImageExt::with_network` +
 //! `with_container_name`) has changed across versions and this was written
 //! without the ability to compile-check it. If this file doesn't compile
-//! against the `testcontainers` version you land on, check its docs.rs
-//! page for the current network API - the `docker-compose.yml` +
-//! `deploy/init-replication.sh` at the repo root prove the identical thing
-//! without depending on this crate at all, and are the more reliable
-//! reference if this test needs adjustment.
+//! against the `testcontainers` version you land on, check its docs.rs page
+//! for the current network API.
 
 use std::time::Duration;
 

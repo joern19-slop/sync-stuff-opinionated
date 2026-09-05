@@ -1,10 +1,9 @@
 //! inotify watcher: recursively watches the sync directory and signals a
-//! (non-blocking) "something changed" on any filesystem event.
+//! non-blocking "something changed" on any filesystem event.
 //!
-//! It doesn't try to classify events - the caller re-scans the tree on each
-//! signal, and that scan is idempotent (it compares mtimes against sync
-//! metadata). It *does* keep watches for new subdirectories current, because
-//! inotify only reports events inside a directory it's explicitly watching.
+//! It doesn't classify events - the caller re-scans the tree on each signal
+//! (an mtime comparison, idempotent). It *does* add watches for new
+//! subdirectories, since inotify only reports events in a watched directory.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -24,7 +23,7 @@ const WATCH_MASK: WatchMask = WatchMask::CREATE
 /// How long to wait before retrying a failed watch.
 const RETRY_INTERVAL: Duration = Duration::from_secs(300);
 
-/// Spawns a background thread that watches `root` recursively and sends `()`
+/// Spawns a background thread that watches `root` recursively, sending `()`
 /// on `changed` whenever anything under it changes.
 pub fn spawn(root: PathBuf, changed: UnboundedSender<()>) -> std::io::Result<()> {
   std::thread::Builder::new()
@@ -33,9 +32,8 @@ pub fn spawn(root: PathBuf, changed: UnboundedSender<()>) -> std::io::Result<()>
   Ok(())
 }
 
-/// Outer loop: (re)establish the watch, retrying on failure. A failed watch
-/// is logged; a *repeated* failure also notifies the user, then it sleeps
-/// `RETRY_INTERVAL` and tries again.
+/// Outer loop: (re)establish the watch, retrying on failure. A *repeated*
+/// failure also notifies the user before sleeping `RETRY_INTERVAL`.
 fn run(root: PathBuf, changed: UnboundedSender<()>) {
   let mut failures = 0u32;
   loop {

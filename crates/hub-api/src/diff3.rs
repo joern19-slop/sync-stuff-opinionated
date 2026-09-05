@@ -1,16 +1,11 @@
 //! Line-based three-way merge (`diff3`).
 //!
-//! The actual merge is delegated to the [`threeway_merge`] crate, which wraps
-//! Git's own xdiff implementation (`xdl_merge`, the same engine behind
-//! `git merge-file`). That gives us a battle-tested merge instead of a
-//! hand-rolled diff3: identical edits collapse, non-overlapping edits merge,
-//! and overlapping edits are reported precisely rather than guessed at.
-//!
-//! This module keeps the crate-local contract the resolver depends on - a
-//! conservative `merge(bytes) -> Result<Vec<u8>, MergeError>` that *fails
-//! closed* on any conflict so the caller falls back to the safe
-//! keep-one-copy-the-other path - plus the small pure-Rust helpers for
-//! reconstructing revision ids and finding two leaves' common ancestor.
+//! The merge itself is delegated to [`threeway_merge`], which wraps Git's
+//! own xdiff (`xdl_merge`, the engine behind `git merge-file`). This module
+//! keeps the resolver's conservative `merge` contract - any conflict or
+//! engine failure is an error (fail closed), so the caller falls back to the
+//! keep-one-copy-the-other path - plus the pure helpers for reconstructing
+//! rev ids and finding a common ancestor.
 
 use std::collections::HashSet;
 
@@ -18,9 +13,7 @@ use threeway_merge::{merge_strings, MergeOptions};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeError {
-  /// The two versions changed the same region differently.
   Conflict,
-  /// Content isn't valid UTF-8, so a line-based text merge can't run.
   NotText,
   /// The underlying merge engine failed unexpectedly. Treated as a conflict
   /// (fail closed) rather than a silent partial merge.
@@ -39,9 +32,6 @@ impl std::fmt::Display for MergeError {
 
 impl std::error::Error for MergeError {}
 
-/// Three-way merge of `mine` and `theirs` against their common ancestor
-/// `base`. Returns the merged bytes, or `MergeError` when the merge can't be
-/// done cleanly (a real conflict, non-text input, or an engine failure).
 pub fn merge(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<Vec<u8>, MergeError> {
   let base = to_text(base)?;
   let mine = to_text(mine)?;
@@ -66,12 +56,10 @@ pub fn revision_at(start: u64, ids: &[String], index: usize) -> Option<String> {
   Some(format!("{gen}-{}", ids.get(index)?))
 }
 
-/// Finds the deepest common ancestor revision id between two leaf revision
-/// histories. Each history is `_revisions`-shaped (`ids` ordered newest →
-/// oldest, generation of `ids[i]` = `start - i`). Returns the full "N-hash"
-/// rev string, or `None` if they share no history (which shouldn't happen
-/// for genuine conflicts). The generation is identical on both branches, so
-/// only one side's `start` is needed to reconstruct it.
+/// Deepest common ancestor of two `_revisions` histories (newest first;
+/// `ids[i]` = generation `start - i`), as a full "N-hash" rev, or `None` if
+/// they share no history. Generations match across branches, so one side's
+/// `start` suffices to reconstruct the rev.
 pub fn common_ancestor(a_ids: &[String], b_start: u64, b_ids: &[String]) -> Option<String> {
   let a_set: HashSet<&str> = a_ids.iter().map(String::as_str).collect();
   for (i, id) in b_ids.iter().enumerate() {

@@ -9,15 +9,15 @@ use common::env;
 
 #[derive(Debug, Clone)]
 pub struct Config {
-  /// Ordered hub base URLs (comma-separated in `FILESYNC_HUBS`).
+  /// Ordered hub base URLs (`FILESYNC_HUBS`).
   pub hubs: Vec<String>,
   /// Shared bearer token (`FILESYNC_TOKEN`).
   pub token: String,
-  /// The directory to sync (`FILESYNC_DIR`).
+  /// Directory to sync (`FILESYNC_DIR`).
   pub dir: PathBuf,
-  /// Where sync metadata lives (defaults to `$XDG_STATE_HOME/filesync`).
+  /// Where sync metadata lives (`FILESYNC_STATE_DIR`; default XDG state).
   pub state_dir: PathBuf,
-  /// Quiet period after the last filesystem event before a sync runs.
+  /// Quiet period after the last event before a sync runs.
   pub debounce: Duration,
 }
 

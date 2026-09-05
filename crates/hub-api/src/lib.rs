@@ -16,13 +16,11 @@ use couch::CouchClient;
 use config::Config;
 use state::AppState;
 
-/// Build the full axum app from config: wires up the CouchDB client,
-/// ensures the target database exists, and assembles the router. Shared by
-/// `main.rs` and the e2e tests so there's exactly one startup path.
+/// The full axum app: CouchDB client + router. Shared by `main.rs` and the
+/// e2e tests so there's one startup path.
 ///
-/// Note this starts *no* background tasks - the Stage 3 watcher / health
-/// checker are spawned by `run()`, so HTTP-only tests can use this without
-/// inheriting a background thread that polls their mock CouchDB.
+/// Starts *no* background tasks (those live in `run()`), so HTTP-only tests
+/// don't inherit a thread polling their mock CouchDB.
 pub async fn build_app(cfg: &Config) -> anyhow::Result<axum::Router> {
   let couch = couch_client(cfg)?;
   couch.ensure_db().await?;
@@ -35,8 +33,7 @@ pub async fn build_app(cfg: &Config) -> anyhow::Result<axum::Router> {
   Ok(routes::build_router(state))
 }
 
-/// Canonical startup: build the app *and* spawn the Stage 3 background tasks
-/// (change watcher -> FCM, replication health -> Discord), then serve.
+/// Canonical startup: `build_app` plus the background tasks, then serve.
 pub async fn run(cfg: &Config) -> anyhow::Result<()> {
   let couch = couch_client(cfg)?;
   couch.ensure_db().await?;

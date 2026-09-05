@@ -1,12 +1,10 @@
 //! Long-poll wake path: holds an open `GET /changes/longpoll` against each
-//! hub and signals "something changed" whenever remote changes arrive, so the
-//! desktop client reacts to other devices promptly without FCM or a poll
-//! timer.
+//! hub and signals "something changed" when remote changes arrive - no FCM or
+//! poll timer needed.
 //!
-//! Each loop advances its own `since` - a wake-detection checkpoint, separate
-//! from the engine's pull checkpoint. Advancing it on every response (even an
-//! empty timeout) means a returned batch isn't re-signalled; the engine's own
-//! checkpoint is untouched until it actually pulls.
+//! Each loop advances its own `since` (a wake-detection checkpoint, separate
+//! from the engine's pull checkpoint): advancing on every response, even an
+//! empty timeout, means a returned batch isn't re-signalled.
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -1,7 +1,7 @@
 //! Desktop file-sync client: watches a directory with inotify and keeps it in
 //! sync with the hub via the client sync engine.
 //!
-//! Configuration is via environment variables (see `config.rs`). On startup it
+//! Configured via environment variables (see `config.rs`). On startup it
 //! reconciles the directory against the hub (catching changes made while it
 //! was off), then watches the tree and re-syncs after every debounced change.
 
@@ -56,8 +56,7 @@ async fn main() -> Result<()> {
       "starting desktop client"
   );
 
-  // Bring the directory and the hub into agreement before watching, so
-  // changes made while we were off aren't lost.
+  // Catch changes made while we were off before watching.
   reconcile::reconcile_and_sync(&engine, &cfg.dir).await?;
 
   let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -74,23 +73,20 @@ async fn main() -> Result<()> {
   loop {
     tokio::select! {
       _ = rx.recv() => {
-        // Wait for the first event, then stay quiet until events have
-        // stopped for `debounce`.
+        // Stay quiet until events stop for `debounce`, then sync.
         while tokio::time::timeout(cfg.debounce, rx.recv()).await.is_ok() {}
         if let Err(e) = reconcile::reconcile_and_sync(&engine, &cfg.dir).await {
           tracing::error!(error = %e, "reconcile/sync failed");
         }
       }
-      // An in-progress reconcile always completes first (the select arm body
-      // runs to the end); we only reach here between syncs.
+      // Signal handlers only run between syncs (select arms run to the end).
       _ = sigterm.recv() => break,
       _ = sigint.recv() => break,
     }
   }
 
-  // Graceful stop: finish any queued work with one final sync, bounded so a
-  // dead hub can't hang shutdown. The durable checkpoint makes an interrupted
-  // sync safe regardless.
+  // One final, bounded sync so a dead hub can't hang shutdown; the durable
+  // checkpoint makes an interrupted sync safe regardless.
   info!("shutdown requested; finishing");
   match tokio::time::timeout(
     Duration::from_secs(30),

@@ -1,11 +1,10 @@
-//! Reconciliation: bring the sync engine's view of the directory up to date
-//! with what's actually on disk, then sync.
+//! Reconciliation: align the engine's view of the directory with what's on
+//! disk, then sync. Runs at startup (catch changes made while off) and after
+//! every debounced inotify signal.
 //!
-//! This runs at startup (to catch changes made while the client was off) and
-//! after every debounced inotify signal. It is idempotent: it detects change
-//! by comparing each file's mtime (seconds) against the sync metadata, and
-//! the engine writes pulled files back with that same mtime, so the client's
-//! own writes don't show up as new edits on the next pass.
+//! Idempotent: change is detected by comparing each file's mtime (seconds)
+//! against sync metadata, and the engine writes pulled files back with that
+//! same mtime, so its own writes don't re-trigger as edits.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,8 +27,7 @@ pub async fn reconcile_and_sync(engine: &SyncEngine, root: &Path) -> Result<()> 
 
     let content = match tokio::fs::read(root.join(path)).await {
       Ok(c) => c,
-      // The file vanished between the scan and the read; the next pass
-      // will pick up its deletion.
+      // Vanished between scan and read; the next pass sees the deletion.
       Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
       Err(e) => return Err(e.into()),
     };

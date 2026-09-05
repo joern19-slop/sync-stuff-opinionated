@@ -1,18 +1,14 @@
-//! The local durable-storage abstractions behind the client sync engine.
+//! The local durable-storage abstractions behind the sync engine.
 //!
-//! The engine needs two distinct kinds of storage, so the platform provides
-//! two implementations:
+//! Two distinct kinds of storage, so a platform provides two backends:
 //!
-//! - [`MetaStore`]: small bookkeeping blobs - the checkpoint, the pending-push
-//!   queue, and per-file metadata (revision / mtime / content type). A native
-//!   client backs this with a small private directory, a web client with
+//! - [`MetaStore`]: small bookkeeping blobs - checkpoint, pending-push queue,
+//!   per-file metadata. Native backs it with a private directory, web with
 //!   IndexedDB.
-//! - [`FileStore`]: the actual file bytes, keyed by path. A native client
-//!   points this at the directory it syncs; a web client at OPFS.
+//! - [`FileStore`]: the actual file bytes, keyed by path. Native points it at
+//!   the synced directory, web at OPFS.
 //!
-//! Splitting them keeps the "where does my data live" answer separate from
-//! the "how do I track sync progress" answer. [`MemStore`] is an in-memory
-//! reference implementing both, used by tests.
+//! [`MemStore`] implements both in-memory, for tests.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -25,23 +21,22 @@ pub enum StoreError {
   Io(String),
 }
 
-/// Small bookkeeping blobs, addressed by an opaque key. The engine owns the
-/// key convention (see `engine`); backends just persist bytes by key.
+/// Small bookkeeping blobs by opaque key. The engine owns the key convention;
+/// backends just persist bytes.
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait MetaStore: Send + Sync {
   async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError>;
   async fn put(&self, key: &str, value: Vec<u8>) -> Result<(), StoreError>;
   async fn delete(&self, key: &str) -> Result<(), StoreError>;
-  /// All stored keys beginning with `prefix` (e.g. `file/`), for
-  /// reconciliation at startup.
+  /// Keys beginning with `prefix` (e.g. `file/`), for reconciliation.
   async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StoreError>;
 }
 
-/// Actual file content, addressed by file path. `mtime` on [`FileStore::put`]
-/// is the file's modification time (Unix seconds) - the native backend uses it
-/// to keep the on-disk mtime consistent with the sync metadata so a later
-/// reconciliation doesn't mistake its own write for a new local edit.
+/// Actual file content by path. `mtime` on [`FileStore::put`] is the file's
+/// modification time (Unix seconds): the native backend keeps the on-disk
+/// mtime consistent with sync metadata so a later reconciliation doesn't
+/// mistake its own write for a new local edit.
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait FileStore: Send + Sync {
@@ -50,9 +45,8 @@ pub trait FileStore: Send + Sync {
   async fn delete(&self, path: &str) -> Result<(), StoreError>;
 }
 
-/// In-memory `MetaStore` + `FileStore` for tests and non-persistent
-/// environments. Keeps the two key spaces separate so a metadata key can
-/// never collide with a file path.
+/// In-memory `MetaStore` + `FileStore`. Keeps the two key spaces separate so
+/// a metadata key can never collide with a file path.
 #[derive(Default, Clone)]
 pub struct MemStore {
   meta: Arc<Mutex<HashMap<String, Vec<u8>>>>,

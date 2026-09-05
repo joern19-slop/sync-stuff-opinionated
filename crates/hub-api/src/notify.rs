@@ -1,17 +1,14 @@
-//! Outbound notifications for the hub: FCM wakeups to devices and Discord
-//! webhook alerts for hub-level problems.
-//!
-//! Both are intentionally thin HTTP clients so they can be exercised against
-//! a `wiremock` server in tests without a real FCM project or Discord webhook.
+//! Outbound notifications: FCM wakeups to devices and Discord webhook alerts
+//! for hub-level problems. Thin HTTP clients so tests can exercise them
+//! against `wiremock` instead of a real FCM/Discord.
 
 use reqwest::Client;
 use serde_json::json;
 use thiserror::Error;
 
-/// Legacy FCM endpoint. Deprecated upstream in favour of the HTTP v1 API
-/// (which needs OAuth2 service-account token exchange); for personal-use
-/// scale the legacy server-key endpoint is the pragmatic choice and is the
-/// one place to swap when migrating. Nothing else in the hub references FCM.
+/// Legacy FCM endpoint - deprecated upstream in favour of HTTP v1 (OAuth2
+/// service-account). Kept for personal-use scale; this is the single place
+/// to swap on migration.
 const FCM_LEGACY_ENDPOINT: &str = "https://fcm.googleapis.com/fcm/send";
 
 #[derive(Debug, Error)]
@@ -23,10 +20,9 @@ pub enum NotifyError {
   Api { status: u16, body: String },
 }
 
-/// Sends silent (data-only) FCM wakeup messages. "Empty body" in the
-/// architecture plan means "no user-visible notification payload" - FCM
-/// still requires *something*, so we send a `data`-only message with
-/// `content_available` (iOS) which wakes the app without alerting the user.
+/// Sends silent wakeups: "empty body" per the plan means no user-visible
+/// payload, but FCM requires something - hence a `data`-only message with
+/// `content_available` (iOS), which wakes the app without alerting.
 #[derive(Debug, Clone)]
 pub struct FcmClient {
   http: Client,
@@ -43,7 +39,7 @@ impl FcmClient {
     }
   }
 
-  /// Override the endpoint (test seam for `wiremock`).
+  /// Test seam for `wiremock`.
   pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
     self.endpoint = endpoint.into();
     self
@@ -80,7 +76,6 @@ impl FcmClient {
   }
 }
 
-/// Posts a text message to a Discord webhook URL.
 #[derive(Debug, Clone)]
 pub struct DiscordClient {
   http: Client,

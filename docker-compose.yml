@@ -1,40 +1,31 @@
-# Stage 1 of the build order: prove the redundancy story with zero custom
-# code. Two independent, standalone CouchDB nodes (not a CouchDB cluster -
-# each is its own single-node instance), wired together with plain
-# continuous bidirectional replication via the built-in _replicator db.
+# Local-development CouchDB for hub-api: a single standalone node.
+#
+# This used to spin up two nodes (a manual Stage-1 redundancy proof), but that
+# proof is now automated by `crates/hub-api/tests/replication_e2e.rs`
+# (testcontainers), and every e2e suite starts its own containers - nothing here
+# is needed to run the tests. This file just gives you a database to point
+# hub-api at while developing.
 #
 # Usage:
 #   docker compose up -d
-#   ./deploy/init-replication.sh
+#   curl -u hub:hub-password localhost:5984/
 #
-# Then verify manually (or via sync-core/tests/replication_e2e.rs):
-#   - write a doc to node-a, confirm it shows up on node-b within a few
-#     seconds, and vice versa
-#   - `docker compose stop node-a`, confirm node-b still serves reads and
-#     accepts writes on its own
-#   - `docker compose start node-a`, confirm it catches back up
+# Then run hub-api against it (hub-api creates the `filesync` db on startup):
+#   COUCH_URL=http://localhost:5984 \
+#   COUCH_USER=hub COUCH_PASSWORD=hub-password \
+#   HUB_DEVICE_TOKENS=dev-token-1 \
+#   cargo run -p hub-api
 
 services:
-  node-a:
-    image: docker.io/library/couchdb:3.5
+  couchdb:
+    image: docker.io/library/couchdb:3.3
     environment:
       COUCHDB_USER: hub
       COUCHDB_PASSWORD: hub-password
     ports:
       - "5984:5984"
     volumes:
-      - node-a-data:/opt/couchdb/data
-
-  node-b:
-    image: docker.io/library/couchdb:3.5
-    environment:
-      COUCHDB_USER: hub
-      COUCHDB_PASSWORD: hub-password
-    ports:
-      - "5985:5984"
-    volumes:
-      - node-b-data:/opt/couchdb/data
+      - couchdb-data:/opt/couchdb/data
 
 volumes:
-  node-a-data:
-  node-b-data:
+  couchdb-data:

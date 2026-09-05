@@ -1,11 +1,10 @@
 //! Filesystem-backed [`MetaStore`] and [`FileStore`] for the desktop client.
 //!
-//! - [`FsMetaStore`] keeps the sync bookkeeping (checkpoints, the pending
-//!   queue, per-file revision/mtime/content-type) in a private directory,
-//!   keyed by URL-encoded key so any engine key is a safe flat filename.
-//! - [`FsFileStore`] is the sync directory itself: file bytes are written
-//!   atomically and the on-disk mtime is set to the sync mtime so a later
-//!   reconciliation doesn't mistake the client's own write for a new edit.
+//! - [`FsMetaStore`]: sync bookkeeping in a private directory, keyed by
+//!   URL-encoded key so any engine key is a safe flat filename.
+//! - [`FsFileStore`]: the sync directory itself - bytes written atomically,
+//!   on-disk mtime set to the sync mtime so a later reconciliation doesn't
+//!   mistake the client's own write for a new edit.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,8 +76,7 @@ impl MetaStore for FsMetaStore {
     while let Some(entry) = rd.next_entry().await.map_err(io_err)? {
       let name = entry.file_name();
       let Some(name) = name.to_str() else { continue };
-      // Our own atomic-write temp files (`.{pid}-{n}.tmp`) are never a real
-      // key.
+      // Skip our own atomic-write temp files (`.{pid}-{n}.tmp`).
       if name.ends_with(".tmp") {
         continue;
       }
@@ -103,8 +101,8 @@ impl FsFileStore {
     Self { root }
   }
 
-  /// Resolves a sync path to a filesystem path, refusing anything that
-  /// would escape the sync root (`..`, absolute paths, ...).
+  /// Resolves a sync path under the root, refusing anything that escapes it
+  /// (`..`, absolute paths, ...).
   fn path_for(&self, path: &str) -> Result<PathBuf, StoreError> {
     let p = Path::new(path);
     if p.components().any(|c| {
@@ -136,8 +134,8 @@ impl FileStore for FsFileStore {
 
     let tmp = dir.join(tmp_name());
     tokio::fs::write(&tmp, &data).await.map_err(io_err)?;
-    // Set the mtime on the temp file before the rename so the destination
-    // never exists with a wrong mtime (the rename preserves it).
+    // Set mtime on the temp before the rename so the destination never
+    // exists with a wrong mtime (rename preserves it).
     if mtime > 0 {
       let _ = filetime::set_file_mtime(&tmp, filetime::FileTime::from_unix_time(mtime, 0));
     }

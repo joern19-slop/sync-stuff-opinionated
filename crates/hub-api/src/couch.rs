@@ -1,9 +1,6 @@
-//! Minimal CouchDB HTTP client.
-//!
-//! This is intentionally narrow: only what the hub API and (eventually) the
-//! conflict resolver need. It knows nothing about "files" - `put_doc` /
-//! `put_attachment` take arbitrary JSON and bytes. Mapping "file path" <->
-//! "CouchDB doc id" happens one layer up, in `hub-api`.
+//! Minimal CouchDB HTTP client: only what the hub and conflict resolver
+//! need. Takes arbitrary JSON/bytes; file-path <-> doc-id mapping lives in
+//! `hub-api`.
 
 use crate::error::CouchError;
 use bytes::Bytes;
@@ -30,9 +27,7 @@ pub struct PutResult {
 #[derive(Debug, Deserialize)]
 pub struct RawChangesResponse {
   pub results: Vec<RawChangeRow>,
-  /// CouchDB's `seq` shape varies by version/config (string, or
-  /// `[number, string]`); treat it as opaque JSON and pass it straight
-  /// through as the API checkpoint.
+  /// CouchDB's `seq` shape varies by version/config - opaque, passed through.
   pub last_seq: serde_json::Value,
 }
 
@@ -42,9 +37,7 @@ pub struct RawChangeRow {
   #[serde(default)]
   pub deleted: bool,
   pub changes: Vec<RawRev>,
-  /// Present when the feed was requested with `include_docs=true`. The
-  /// winning revision's body (with `_conflicts` when the doc is conflicted
-  /// and `conflicts=true` was requested).
+  /// The winning revision's body (`include_docs`/`conflicts` as requested).
   #[serde(default)]
   pub doc: Option<serde_json::Value>,
 }
@@ -54,8 +47,7 @@ pub struct RawRev {
   pub rev: String,
 }
 
-/// CouchDB's `_revisions` shape (`GET /db/doc?revs=true`): the winning (or
-/// requested) branch's history, newest first. `ids[i]` is generation
+/// CouchDB `_revisions` (`revs=true`), newest first; `ids[i]` is generation
 /// `start - i`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Revisions {
@@ -63,9 +55,8 @@ pub struct Revisions {
   pub ids: Vec<String>,
 }
 
-/// One entry from CouchDB's node-level `GET /_scheduler/jobs`, describing a
-/// replication the node is currently managing (including continuous
-/// hub-to-hub replications). Used by the hub's replication-health checker.
+/// One node-level `/_scheduler/jobs` entry - e.g. a continuous hub-to-hub
+/// replication the health checker watches.
 #[derive(Debug, Deserialize)]
 pub struct SchedulerJob {
   pub id: String,
@@ -77,10 +68,8 @@ pub struct SchedulerJob {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct SchedulerJobInfo {
-  /// Non-empty when the replication last errored.
   #[serde(default)]
   pub error: Option<String>,
-  /// RFC3339 timestamp of the last replication activity, if any.
   #[serde(default)]
   pub last_updated: Option<String>,
 }
@@ -106,14 +95,12 @@ impl CouchClient {
     self.append(&self.base, &[&self.db])
   }
 
-  /// The document's URL: the doc id (which may contain `/`) is pushed as a
-  /// single percent-encoded path segment, so a file path like `notes/a.txt`
-  /// addresses one CouchDB doc, not a sub-path.
+  /// Doc id (may contain `/`) as one percent-encoded segment, so a path
+  /// like `notes/a.txt` is one doc, not a sub-path.
   fn doc_url(&self, id: &str) -> Result<Url, CouchError> {
     self.append(&self.db_url()?, &[id])
   }
 
-  /// Clones `url` and appends each segment, percent-encoding as needed.
   fn append(&self, url: &Url, segments: &[&str]) -> Result<Url, CouchError> {
     let mut url = url.clone();
     {
@@ -134,7 +121,7 @@ impl CouchClient {
       .basic_auth(&self.user, Some(&self.pass))
   }
 
-  /// Idempotent: succeeds whether or not the db already existed.
+  /// Idempotent.
   pub async fn ensure_db(&self) -> Result<(), CouchError> {
     let resp = self.req(Method::PUT, self.db_url()?).send().await?;
     match resp.status() {
@@ -143,8 +130,7 @@ impl CouchClient {
     }
   }
 
-  /// Node-level replication jobs via `GET /_scheduler/jobs`. Note this is
-  /// *not* scoped to `self.db` - the scheduler is a node-wide concept.
+  /// Node-wide (`/_scheduler/jobs`), not scoped to `self.db`.
   pub async fn replication_jobs(&self) -> Result<Vec<SchedulerJob>, CouchError> {
     let url = self.append(&self.base, &["_scheduler", "jobs"])?;
     let resp = self.req(Method::GET, url).send().await?;
@@ -157,14 +143,10 @@ impl CouchClient {
     Ok(body.jobs)
   }
 
-  /// Wraps `GET /{db}/_changes`.
   pub async fn changes(&self, since: Option<&str>) -> Result<RawChangesResponse, CouchError> {
     self.changes_inner(since, false).await
   }
 
-  /// Wraps `GET /{db}/_changes?feed=longpoll`: blocks up to `timeout_secs`
-  /// waiting for a change, returning immediately when one lands (or empty
-  /// results with the current `last_seq` when the timeout elapses).
   pub async fn changes_longpoll(
     &self,
     since: Option<&str>,
@@ -184,9 +166,7 @@ impl CouchClient {
     Self::json_or_err(resp).await
   }
 
-  /// Like `changes`, but with `include_docs=true&conflicts=true` so each
-  /// row carries the winning doc body (and `_conflicts` when present).
-  /// Used by the conflict-detecting change watcher.
+  /// With `include_docs=true&conflicts=true` so rows carry `_conflicts`.
   pub async fn changes_with_docs(
     &self,
     since: Option<&str>,
@@ -215,10 +195,8 @@ impl CouchClient {
     Self::json_or_err(resp).await
   }
 
-  /// Current winning revision's JSON body, or `None` if the doc doesn't
-  /// exist (never existed, or its winning revision is a tombstone).
-  /// Requested with `conflicts=true` so a conflicted doc carries its
-  /// `_conflicts` list; callers that don't care can ignore it.
+  /// The winning revision's body, or `None` if the doc is absent or a
+  /// tombstone.
   pub async fn get_doc(&self, id: &str) -> Result<Option<serde_json::Value>, CouchError> {
     let mut url = self.doc_url(id)?;
     url.query_pairs_mut().append_pair("conflicts", "true");
@@ -229,10 +207,8 @@ impl CouchClient {
     Ok(Some(Self::json_or_err(resp).await?))
   }
 
-  /// A specific revision's body (including `_revisions` history and
-  /// `_deleted` flag) via `GET /db/doc?rev=..&revs=true`. `None` if that
-  /// revision (or the doc) doesn't exist. Used by the conflict resolver to
-  /// read losing leaves and their shared ancestor.
+  /// A specific revision's body with `_revisions` history; `None` if absent.
+  /// Used to read losing leaves and their shared ancestor.
   pub async fn get_doc_at_rev(
     &self,
     id: &str,
@@ -255,10 +231,8 @@ impl CouchClient {
     self.get_attachment_at_rev(id, attachment, None).await
   }
 
-  /// Fetches an attachment, optionally at a specific revision. The
-  /// conflict resolver needs `rev` to read a losing leaf's or the common
-  /// ancestor's content; the plain `get_attachment` call reads the winning
-  /// revision's content.
+  /// `rev` reads a losing leaf's or the shared ancestor's content (the
+  /// resolver's need); without it, the winning revision's.
   pub async fn get_attachment_at_rev(
     &self,
     id: &str,
@@ -276,11 +250,9 @@ impl CouchClient {
     Ok(resp.bytes().await?)
   }
 
-  /// All leaf revisions via `GET /db/doc?open_revs=all&revs=true`, returned
-  /// as individual docs (with `_revisions` history and `_deleted` flag).
-  /// This is the only way to see a *losing* edit leaf when a deletion is
-  /// the winning revision - the normal `get_doc` returns 404 in that case
-  /// and the `_changes` feed reports it as a plain `deleted`.
+  /// All leaf revisions (`open_revs=all`). The only way to see a losing
+  /// edit leaf when a deletion won - `get_doc` 404s and `_changes` reports
+  /// it as a plain `deleted`.
   pub async fn get_doc_leaves(&self, id: &str) -> Result<Vec<serde_json::Value>, CouchError> {
     let mut url = self.doc_url(id)?;
     {
@@ -306,11 +278,9 @@ impl CouchClient {
     Ok(parse_open_revs(&content_type, &body))
   }
 
-  /// Create/update a doc's JSON body. `rev` is the revision this write is
-  /// conditioned on; `None` means "must not already exist". Returns
-  /// `Err(CouchError::RevConflict)` on a 409, which the caller (hub-api /
-  /// conflict resolver) turns into a retry-or-report decision - this
-  /// client never retries on its own.
+  /// CAS write: `rev` is the revision the write is conditioned on; `None` =
+  /// must not already exist. A 409 surfaces as `RevConflict` for the caller
+  /// to resolve; this client never retries.
   pub async fn put_doc(
     &self,
     id: &str,
@@ -328,11 +298,9 @@ impl CouchClient {
     Self::put_result(resp, id).await
   }
 
-  /// Upload the file's bytes as the doc's `content` attachment. This is a
-  /// second HTTP call after `put_doc`, not a single multipart write - kept
-  /// simple for Stage 2. Both calls are CAS-conditioned so a crash between
-  /// them just looks like "doc updated, attachment stale", which a client
-  /// retry (with the doc's now-current rev) fixes.
+  /// A second call after `put_doc` (not one multipart write). Both are
+  /// CAS-conditioned, so a crash between them just looks like a stale
+  /// attachment a retry with the current rev fixes.
   pub async fn put_attachment(
     &self,
     id: &str,
@@ -358,14 +326,10 @@ impl CouchClient {
     Self::put_result(resp, id).await
   }
 
-  /// Inserts an arbitrary revision into the tree via `_bulk_docs` with
-  /// `new_edits:false`. The doc must already carry `_id`, `_rev`,
-  /// `_revisions`, and (for tombstones) `_deleted`; CouchDB trusts those
-  /// fields verbatim instead of deriving them from the body. Used by the
-  /// hub to *branch* the tree when a client pushes a stale `base_rev`.
-  ///
-  /// A per-doc `conflict` result means that exact revision already exists,
-  /// which the caller treats as "branch already present" (idempotent retry).
+  /// Inserts a revision verbatim (`_bulk_docs`, `new_edits:false`) - CouchDB
+  /// trusts the carried `_id`/`_rev`/`_revisions` instead of deriving them -
+  /// to *branch* the tree on a stale `base_rev` push. A per-doc `conflict`
+  /// means the branch is already present (idempotent).
   pub async fn put_revision(&self, doc: serde_json::Value) -> Result<(), CouchError> {
     let url = self.append(&self.db_url()?, &["_bulk_docs"])?;
     let resp = self
@@ -426,15 +390,12 @@ impl CouchClient {
   }
 }
 
-/// Parses an `open_revs=all` response into individual leaf docs. CouchDB
-/// returns these as `multipart/mixed` (one JSON body per leaf); older/other
-/// setups may return a plain JSON array instead.
+/// Parses `open_revs=all`: CouchDB emits `multipart/mixed` (a JSON body per
+/// leaf); some setups return a plain JSON array instead.
 fn parse_open_revs(content_type: &str, body: &[u8]) -> Vec<serde_json::Value> {
   if content_type.contains("multipart") {
     let mut out = Vec::new();
-    // Each part's JSON body is emitted by CouchDB as a single line that
-    // starts with `{`; boundary (`--...`) and header (`Key: value`) lines
-    // never do.
+    // A leaf's JSON body arrives as a single line starting with `{`.
     for line in body.split(|&b| b == b'\n') {
       let line = std::str::from_utf8(line).unwrap_or("");
       let line = line.trim();

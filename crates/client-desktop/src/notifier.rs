@@ -7,12 +7,13 @@ use std::time::{Duration, Instant};
 use client_core::{Notifier, SyncError};
 
 /// Identical errors are suppressed within this window so a persistently-down
-/// hub doesn't toast on every retry, but a recovery followed by a fresh
-/// failure still re-notifies.
+/// hub doesn't toast on every retry; a fresh failure after recovery still
+/// re-notifies.
 const DEDUPE_WINDOW: Duration = Duration::from_secs(300);
 
-/// Pops a desktop notification, best-effort (a missing notification daemon is
-/// logged, not fatal). Shared by the [`Notifier`] impl and the file watcher.
+/// Pops a desktop notification, best-effort (a missing notification daemon
+/// is logged, not fatal). Shared by the [`Notifier`] impl and the file
+/// watcher.
 pub(crate) fn show_notification(summary: &str, body: &str) {
   let shown = notify_rust::Notification::new()
     .summary(summary)

@@ -1,21 +1,17 @@
 //! The client sync engine: pull hub changes into the local store with a
 //! durable checkpoint, and push locally-recorded changes back up.
 //!
-//! The engine owns no merge logic - per the architecture plan it only ever
-//! sees the hub's *resolved* view of the world. Its safety guarantees are:
+//! The engine has no merge logic - it only ever sees the hub's *resolved*
+//! view of the world. Its safety guarantees:
 //!
-//! 1. A checkpoint is only advanced after the whole batch it covers has been
-//!    written durably (so a crash mid-pull re-pulls the same batch - the
-//!    writes are idempotent).
-//! 2. A push that the hub rejects (`Conflict`) is never dropped: the local
-//!    change stays queued and is reported to the caller, which decides what
-//!    to do (the exact client UX is deferred, see NOTES.md).
+//! 1. A checkpoint advances only after the whole batch it covers is durable
+//!    (a crash mid-pull re-pulls the same idempotent batch).
+//! 2. A push the hub rejects is never dropped: it stays queued and is
+//!    reported to the caller.
 //!
-//! Multi-hub failover (build order Stage 7): the engine holds an ordered list
-//! of hubs and tries them in turn. Checkpoints are keyed per hub because a
-//! CouchDB `seq` is node-local - two hubs are replicas but do not share `seq`
-//! values. Revisions, by contrast, are CouchDB revision hashes and *are*
-//! consistent across replicas, so the pending-push queue is global.
+//! Multi-hub failover (Stage 7): hubs are tried in order. Checkpoints are
+//! keyed per hub because CouchDB `seq` is node-local; the pending-push queue
+//! is global because revisions are consistent across replicas.
 
 use std::sync::Arc;
 
@@ -28,10 +24,8 @@ use crate::hub::{FileContent, HubClient, HubError};
 use crate::notify::Notifier;
 use crate::store::{FileStore, MetaStore, StoreError};
 
-/// Key holding the serialized pending-push queue.
 pub const KEY_PENDING: &str = "pending";
 
-/// Key for a file's stored metadata.
 pub fn file_key(path: &str) -> String {
   format!("file/{path}")
 }
@@ -49,9 +43,9 @@ pub enum SyncError {
   Hub(#[from] HubError),
 }
 
-/// Per-file metadata stored locally: the revision to use as `base_rev` on the
-/// next push, plus the mtime/content-type needed to push it back correctly.
-/// The content itself lives in the [`FileStore`], not here.
+/// Local per-file metadata: the revision to use as `base_rev` on the next
+/// push, plus the mtime/content-type to push it back. Content lives in the
+/// [`FileStore`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMeta {
   pub rev: String,
@@ -59,8 +53,8 @@ pub struct FileMeta {
   pub content_type: String,
 }
 
-/// One local change waiting to be pushed. Content is *not* duplicated here -
-/// it lives in the [`FileStore`] and is read at push time.
+/// A queued local change; content is read from the [`FileStore`] at push
+/// time, not stored here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingChange {
   pub path: String,
@@ -72,20 +66,17 @@ pub struct PendingChange {
 
 #[derive(Debug, Default)]
 pub struct PullReport {
-  /// Id of the hub that served this pull.
   pub hub: String,
   pub pulled: usize,
   pub deleted: usize,
-  /// Paths whose incoming change was skipped because a local (not-yet-
-  /// pushed) edit exists for the same path. Surfaces a local-vs-remote
-  /// conflict to the caller without losing either side.
+  /// Paths skipped because an unpushed local edit exists for them; surfaces
+  /// a local-vs-remote conflict without losing either side.
   pub local_conflicts: Vec<String>,
   pub checkpoint: Option<String>,
 }
 
 #[derive(Debug, Default)]
 pub struct PushReport {
-  /// Id of the hub that accepted this push.
   pub hub: String,
   pub pushed: usize,
 }
@@ -113,29 +104,19 @@ impl SyncEngine {
     }
   }
 
-  /// Attach a [`Notifier`] that the engine calls whenever it returns an
-  /// unexpected error (a hub that's down after every fallback, a local
-  /// store failure, ...) so the app can show it to the user.
   pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
     self.notifier = Some(notifier);
     self
   }
 
-  /// Push, then pull - the app layer calls this on any wake trigger (FCM
-  /// push, app foreground-open, charging-started).
-  ///
-  /// Push first, then pull: pushing can trigger a hub-side merge (when the
-  /// push is based on a stale revision), so the authoritative content is
-  /// only known *after* the push. Pulling last converges the local copy
-  /// with the hub's resolved result in the same cycle.
+  /// Push then pull: a push can trigger a hub-side merge, so the resolved
+  /// content is only known after the push; pulling last converges on it.
   pub async fn sync(&self) -> Result<SyncReport, SyncError> {
     let push = self.push().await?;
     let pull = self.pull().await?;
     Ok(SyncReport { pull, push })
   }
 
-  /// Pulls remote changes, advancing the checkpoint only once the whole
-  /// batch is durable.
   pub async fn pull(&self) -> Result<PullReport, SyncError> {
     let mut last_hub_err = None;
     for hub in &self.hubs {
@@ -172,8 +153,8 @@ impl SyncEngine {
       self.apply_remote(hub, entry, &mut report).await?;
     }
 
-    // The batch is fully durable; only now is it safe to remember where
-    // we got to. If this write fails, the batch just re-pulls next time.
+    // Checkpoint only once the batch is durable; a failure here just
+    // re-pulls next time.
     self.meta.put(&ck_key, resp.checkpoint.into_bytes()).await?;
 
     Ok(report)
@@ -185,9 +166,8 @@ impl SyncEngine {
     entry: &ChangeEntry,
     report: &mut PullReport,
   ) -> Result<(), SyncError> {
-    // A pending local change means we have unsynced local work for this
-    // path; overwriting it with the remote version would lose it. Skip
-    // and flag it for the caller instead.
+    // Skip paths with pending local edits - the remote version would
+    // overwrite (lose) them.
     if self.pending_contains(&entry.path).await? {
       report.local_conflicts.push(entry.path.clone());
       return Ok(());
@@ -219,8 +199,6 @@ impl SyncEngine {
     Ok(())
   }
 
-  /// Pushes the pending queue, clearing entries only on an explicit `Ok`
-  /// from the hub.
   pub async fn push(&self) -> Result<PushReport, SyncError> {
     let pending = self.report(self.load_pending().await)?;
     if pending.is_empty() {
@@ -256,20 +234,17 @@ impl SyncEngine {
       ..Default::default()
     };
 
+    // For upserts adopt the hub's new rev as the local base; deletes have
+    // nothing to record (the local file is already gone).
     for (change, result) in pending.iter().zip(&results) {
-      // The hub now has our content. For an upsert, record the hub's new
-      // revision as the local base for next time; for a delete the local
-      // file is already gone.
       if !change.deleted {
         self.bump_rev(&change.path, &result.rev).await?;
       }
       report.pushed += 1;
     }
 
-    // Clear the queue only on a full, successful batch. If the hub returned
-    // fewer results than we sent, that's a protocol violation - keep
-    // everything queued to stay safe. (A rejected push surfaces as an HTTP
-    // error on `hub.push` above, which aborts before we get here.)
+    // Clear only on a full, successful batch; fewer results than sent is a
+    // protocol violation - keep everything queued.
     if results.len() == changes.len() {
       self
         .meta
@@ -280,9 +255,8 @@ impl SyncEngine {
     Ok(report)
   }
 
-  /// Record a local create/edit: persist content + metadata durably, then
-  /// queue a push based on the previous revision (so the hub can CAS-check
-  /// it). Coalesces per path - recording twice keeps one queued entry.
+  /// Record a local create/edit durably, then queue a push based on the
+  /// previous revision (so the hub can CAS-check it). Coalesces per path.
   pub async fn record_upsert(
     &self,
     path: &str,
@@ -335,7 +309,7 @@ impl SyncEngine {
       .await
   }
 
-  /// Record a local delete: remove the file durably, then queue a delete.
+  /// Record a local delete durably, then queue a delete.
   pub async fn record_delete(&self, path: &str, mtime: i64) -> Result<(), SyncError> {
     self.report(self.record_delete_inner(path, mtime).await)
   }
@@ -364,12 +338,10 @@ impl SyncEngine {
       .await
   }
 
-  /// Reads a file's raw content back from the file store.
   pub async fn read_file(&self, path: &str) -> Result<Option<Vec<u8>>, SyncError> {
     Ok(self.files.get(path).await?)
   }
 
-  /// Reads a file's stored metadata (revision / mtime / content type).
   pub async fn read_file_meta(&self, path: &str) -> Result<Option<FileMeta>, SyncError> {
     let Some(bytes) = self.meta.get(&file_key(path)).await? else {
       return Ok(None);
@@ -377,8 +349,7 @@ impl SyncEngine {
     Ok(serde_json::from_slice(&bytes).ok())
   }
 
-  /// Reads a hub's current checkpoint, if any (used by a client that wants
-  /// to long-poll for changes without pulling them itself).
+  /// A hub's current checkpoint, for clients that long-poll without pulling.
   pub async fn checkpoint(&self, hub_id: &str) -> Result<Option<String>, SyncError> {
     Ok(
       self
@@ -389,9 +360,8 @@ impl SyncEngine {
     )
   }
 
-  /// Every path the engine currently has metadata for (i.e. every file it
-  /// believes exists locally). Used by a client to reconcile deletions that
-  /// happened while it was not running.
+  /// Every path with stored metadata, for reconciling deletions that
+  /// happened while the client was off.
   pub async fn list_file_paths(&self) -> Result<Vec<String>, SyncError> {
     Ok(
       self
@@ -404,7 +374,6 @@ impl SyncEngine {
     )
   }
 
-  /// The currently-queued local changes (for observability/testing).
   pub async fn pending(&self) -> Result<Vec<PendingChange>, SyncError> {
     self.load_pending().await
   }
@@ -481,9 +450,6 @@ impl SyncEngine {
     Ok(out)
   }
 
-  /// Reports an unexpected error to the configured notifier (if any) and
-  /// returns it unchanged, so callers can `notify` and `return`/`?` in one
-  /// step.
   fn notify(&self, error: SyncError) -> SyncError {
     if let Some(notifier) = &self.notifier {
       notifier.notify_error(&error);
@@ -491,7 +457,6 @@ impl SyncEngine {
     error
   }
 
-  /// Notifies on an `Err` and passes the result through unchanged.
   fn report<T>(&self, result: Result<T, SyncError>) -> Result<T, SyncError> {
     match result {
       Ok(v) => Ok(v),

@@ -1,12 +1,11 @@
 //! Hub-side conflict resolver (Build Order Stage 5 + 6).
 //!
-//! Lives entirely on the hub, driven by the change watcher. Clients never
-//! see an unresolved conflict - they only observe the outcome as an ordinary
-//! change. Every write is CAS-conditioned on the revision the resolver read;
-//! a `409` means the doc moved underneath us (a third write landed, or the
-//! other hub resolved first), so we re-read and retry. Both hubs run the
-//! same deterministic algorithm, so when they race on the same conflict one
-//! wins the CAS and the other sees "already resolved" and stops.
+//! Driven by the change watcher; clients never see an unresolved conflict,
+//! only the outcome as an ordinary change. Every write is CAS-conditioned on
+//! the revision read, so a `409` (a third write landed, or the other hub
+//! resolved first) means re-read and retry. Both hubs run the same
+//! deterministic algorithm: on a race, one wins the CAS, the other sees
+//! "already resolved" and stops.
 
 use crate::couch::{CouchClient, Revisions};
 use crate::error::CouchError;
@@ -37,8 +36,7 @@ pub struct Resolved {
   pub path: String,
   /// How the resolution happened, for logging/tests.
   pub kind: ResolutionKind,
-  /// Paths of any `.conflict-*` copies written (content that would
-  /// otherwise have been overwritten, preserved as separate files).
+  /// `.conflict-*` files written to preserve otherwise-overwritten content.
   pub conflict_copies: Vec<String>,
 }
 
@@ -79,15 +77,12 @@ struct Copy {
   content_type: String,
 }
 
-/// Resolve a conflict on `path` if one exists. Returns `NoConflict` when the
-/// doc is unconflicted, deleted, or missing. Idempotent and safe to call on
-/// every hub for every change.
+/// Resolve `path`'s conflict if one exists; `NoConflict` when the doc is
+/// unconflicted, deleted, or missing. Idempotent.
 pub async fn resolve(couch: &CouchClient, path: &str) -> Result<Outcome, ResolveError> {
   for _ in 0..MAX_RETRIES {
     let Some(winner) = couch.get_doc(path).await? else {
-      // Winning rev is a tombstone (or the doc is missing). Could be a
-      // delete-winner edit-vs-delete conflict, which `get_doc` can't
-      // see; check for a hidden edit leaf.
+      // A delete-winner conflict hides its edit leaf from `get_doc`.
       return resolve_delete_winner(couch, path).await;
     };
 
@@ -176,10 +171,9 @@ async fn leaf_from_doc(
   })
 }
 
-/// Handles the delete-winner edit-vs-delete case: the winning rev is a
-/// tombstone so `get_doc` 404s, but `open_revs=all` reveals a losing edit
-/// leaf. Per the plan, the edit wins unconditionally - we resurrect it on top
-/// of the winning tombstone and CAS-delete the other leaves.
+/// Delete-winner edit-vs-delete: `get_doc` 404s on the tombstone, but
+/// `open_revs=all` reveals the losing edit leaf, which wins unconditionally -
+/// resurrected on top of the tombstone, other leaves CAS-deleted.
 async fn resolve_delete_winner(couch: &CouchClient, path: &str) -> Result<Outcome, ResolveError> {
   for _ in 0..MAX_RETRIES {
     let raws = couch.get_doc_leaves(path).await?;
@@ -283,9 +277,9 @@ async fn plan_resolution(
     });
   }
 
-  // Anything else (3+ alive leaves, or all tombstones): keep the winner if
-  // alive, else the first alive leaf, else nothing. Preserve every other
-  // alive leaf as a conflict copy. Conservative, but never loses data.
+  // Otherwise (3+ alive leaves, or all tombstones): keep the winner if
+  // alive, else the first alive leaf, else nothing. Preserve the rest as
+  // conflict copies - conservative, never loses data.
   let keep = if !winner.deleted {
     Some(winner)
   } else {
@@ -325,11 +319,8 @@ async fn plan_edit_vs_edit(
 ) -> Result<Plan, ResolveError> {
   let winner_rev = winner.rev.clone();
 
-  // Determine the common ancestor. When the two leaves share no history
-  // (e.g. two devices independently created the same new path), fall back
-  // to an empty base: diff3 against empty content merges identical content
-  // and conflicts otherwise - the "edit-vs-edit with empty base" rule for
-  // new-file collisions.
+  // diff3 against the common ancestor; with no shared history (two devices
+  // independently created the same new path), fall back to an empty base.
   let base = match (&winner.revisions, &loser.revisions) {
     (Some(a), Some(b)) => match diff3::common_ancestor(&a.ids, b.start, &b.ids) {
       Some(rev) => couch
@@ -354,8 +345,8 @@ async fn plan_edit_vs_edit(
     });
   }
 
-  // Merge failed (or no ancestor): keep the newer file, preserve the older
-  // one as a `.conflict-*` copy.
+  // Merge failed: keep the newer file, preserve the older as a `.conflict-*`
+  // copy.
   let (newer, older) = if winner.mtime >= loser.mtime {
     (winner, loser)
   } else {
@@ -384,7 +375,7 @@ async fn apply_plan(
 ) -> Result<Vec<String>, ResolveError> {
   let mut written = Vec::new();
 
-  // 1. Preserve losing content as `.conflict-*` files before overwriting.
+  // Preserve losing content as `.conflict-*` files before overwriting.
   for copy in &plan.copies {
     let copy_path = conflict_copy_path(couch, path).await?;
     let doc = couch
@@ -411,7 +402,7 @@ async fn apply_plan(
     written.push(copy_path);
   }
 
-  // 2. Write the resolved content on top of the current winner.
+  // Write the resolved content on top of the current winner.
   if let Some(content) = &plan.final_content {
     let doc = couch
       .put_doc(
@@ -436,8 +427,8 @@ async fn apply_plan(
       .map_err(map_couch)?;
   }
 
-  // 3. CAS-delete every losing leaf so `_conflicts` clears. CouchDB never
-  // clears the flag on its own, even after a new winner exists.
+  // CAS-delete every losing leaf: CouchDB never clears `_conflicts` on its
+  // own, even once a new winner exists.
   for rev in &plan.loser_revs {
     couch.delete_doc(path, rev).await.map_err(map_couch)?;
   }

@@ -4,9 +4,8 @@ Implementation of `ArchitecturePlan.md`. Build order progress:
 
 - **Stage 1** - prove CouchDB-only redundancy (two standalone nodes,
   continuous bidirectional replication, either one survives alone).
-  `docker-compose.yml` + `init-replication.sh` is the primary proof;
-  `crates/hub-api/tests/replication_e2e.rs` is an automated (testcontainers)
-  version of the same thing.
+  `crates/hub-api/tests/replication_e2e.rs` automates this with testcontainers
+  (`cargo test -p hub-api --test replication_e2e -- --ignored`).
 - **Stage 2** - the Rust Hub Sync API (`GET /changes`, `POST /changes`,
   `GET /file/{path}`) against a single CouchDB.
 - **Stage 3** - Change Watcher + notifier: the hub long-polls its own
@@ -44,10 +43,13 @@ implements `MetaStore` (XDG state dir) and `FileStore` (the sync dir), a
 concrete `Notifier` (logs to stderr), and an inotify watcher wired to
 reconciliation + sync on a debounce. See "Running the desktop client" below.
 
-**Not implemented yet:** the web `MetaStore`/`FileStore` backings
-(OPFS/IndexedDB), the WASM target, and the FCM-wake/foreground/charge trigger
-wiring for mobile - all deferred pending those concrete client targets. See
-`ArchitecturePlan.md`.
+**Web client:** `crates/client-web` compiles the engine to `wasm32` with
+`OpfsFileStore`/`OpfsMetaStore` over OPFS and a wasm-bindgen façade (`WebSync`) -
+built for, and currently powering, the web calendar (Tuta's UI on the filesync
+backend). See `calendar/PLAN.md` and `calendar/STATUS.md`.
+
+**Not implemented yet:** the FCM-wake / foreground / charge trigger wiring for
+mobile - deferred pending a concrete mobile client. See `ArchitecturePlan.md`.
 
 ## Layout
 
@@ -58,8 +60,9 @@ crates/common/               shared HTTP client (timeouts) + strict env parsing
 crates/hub-api/             axum service: Hub Sync API + CouchDB client + diff3 + resolver
 crates/client-core/         client sync engine + MetaStore/FileStore traits (Stage 4/7)
 crates/client-desktop/      headless inotify client (the first concrete client)
-docker-compose.yml          two standalone CouchDB nodes (Stage 1)
-init-replication.sh         wires up bidirectional replication between them
+crates/client-web/          wasm32 sync engine + OPFS stores (web calendar backend)
+docker-compose.yml          single local CouchDB for development (two-node proof is the e2e test)
+calendar/                   plan + status for the web calendar (calendar/PLAN.md)
 ```
 
 ## Running it
@@ -67,15 +70,14 @@ init-replication.sh         wires up bidirectional replication between them
 Requires Docker.
 
 ```bash
-# Stage 1 - CouchDB redundancy, no app code involved
+# Development CouchDB (single node) - the e2e tests start their own
 docker compose up -d
-./init-replication.sh
-# write to node-a (:5984), read from node-b (:5985) a couple seconds later
-curl -u hub:hub-password -X PUT localhost:5984/filesync/hello \
-  -H 'Content-Type: application/json' -d '{"msg":"hi"}'
-curl -u hub:hub-password localhost:5985/filesync/hello
+curl -u hub:hub-password localhost:5984/
 
-# Stage 2+3 - the hub API against node-a, with FCM wakeups and Discord alerts
+# Stage 1 - CouchDB redundancy, no app code involved (automated, testcontainers)
+cargo test -p hub-api --test replication_e2e -- --ignored --nocapture
+
+# Stage 2+3 - the hub API against the local CouchDB, with FCM wakeups and Discord alerts
 COUCH_URL=http://localhost:5984 \
 COUCH_USER=hub COUCH_PASSWORD=hub-password \
 HUB_DEVICE_TOKENS=dev-token-1,dev-token-2 \

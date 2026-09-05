@@ -1,18 +1,16 @@
-//! HTTP client for the Hub Sync API, the client-side counterpart to the
-//! CouchDB client the *hub* uses internally (`hub-api::couch`). A client
-//! speaks only this contract - it never talks CouchDB directly.
+//! HTTP client for the Hub Sync API - the client-side counterpart to the
+//! CouchDB client the hub uses internally. A client speaks only this
+//! contract, never CouchDB directly.
 //!
-//! Each `HubClient` targets a single hub; multi-hub failover is layered on
-//! top by the sync engine, which owns per-hub checkpoints (a CouchDB `seq`
-//! is node-local, so it must be scoped to the hub that issued it).
+//! Each `HubClient` targets one hub; failover is layered on by the engine,
+//! which owns per-hub checkpoints (CouchDB `seq` is node-local).
 
 use std::time::Duration;
 
 use protocol_types::{ChangesResponse, PushChange, PushResult};
 use thiserror::Error;
 
-/// The HTTP request timeout for a long-poll: it must outlast the hub's hold
-/// (up to 60s), with margin.
+/// Must outlast the hub's long-poll hold (up to 60s), with margin.
 const LONGPOLL_REQUEST_TIMEOUT: Duration = Duration::from_secs(65);
 
 #[derive(Debug, Error)]
@@ -50,13 +48,13 @@ impl HubClient {
     }
   }
 
-  /// Stable identifier for this hub, used to key its checkpoint. For now
-  /// that's just the base URL.
+  /// Stable identifier for this hub; keys its checkpoint. For now, the base
+  /// URL.
   pub fn id(&self) -> &str {
     &self.base_url
   }
 
-  /// `GET /changes?since=<checkpoint>`. `None` means "from the beginning".
+  /// `GET /changes`; `None` means "from the beginning".
   pub async fn changes(&self, since: Option<&str>) -> Result<ChangesResponse, HubError> {
     let mut url = format!("{}/changes", self.base_url.trim_end_matches('/'));
     if let Some(s) = since {
@@ -73,9 +71,8 @@ impl HubClient {
     Self::json_or_err(resp).await
   }
 
-  /// `GET /changes/longpoll` - blocks up to `timeout_secs` waiting for a
-  /// change, returning immediately when one lands (or empty on timeout).
-  /// The hub-side, FCM-free "wake" path for desktop clients.
+  /// `GET /changes/longpoll` - blocks up to `timeout_secs`, or returns
+  /// immediately when a change lands. The desktop "wake" path.
   pub async fn longpoll(
     &self,
     since: Option<&str>,
@@ -99,8 +96,7 @@ impl HubClient {
     Self::json_or_err(resp).await
   }
 
-  /// `GET /file/{path}`. `Ok(None)` when the hub has no such file (the
-  /// path was deleted, or never existed).
+  /// `GET /file/{path}`. `Ok(None)` when the hub has no such file.
   pub async fn get_file(&self, path: &str) -> Result<Option<FileContent>, HubError> {
     let url = format!(
       "{}/file/{}",
@@ -138,8 +134,7 @@ impl HubClient {
     }))
   }
 
-  /// `POST /changes` - push a batch of local changes. Returns one result
-  /// per input, in order.
+  /// `POST /changes` - returns one result per input, in order.
   pub async fn push(&self, changes: &[PushChange]) -> Result<Vec<PushResult>, HubError> {
     let url = format!("{}/changes", self.base_url.trim_end_matches('/'));
     let resp = self
@@ -179,9 +174,8 @@ impl HubClient {
   }
 }
 
-/// Percent-encodes each path segment but preserves `/` separators, so a file
-/// path like `notes/a.txt` stays a sub-path while spaces/special chars are
-/// encoded. (The hub's wildcard route then decodes each segment back.)
+/// Encodes each path segment but keeps `/` separators, so `notes/a.txt`
+/// stays a sub-path while spaces/special chars are encoded.
 fn encode_path(path: &str) -> String {
   path
     .split('/')

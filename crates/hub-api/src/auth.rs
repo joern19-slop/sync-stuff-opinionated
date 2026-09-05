@@ -9,9 +9,8 @@ use std::sync::Arc;
 use crate::state::AppState;
 
 /// Shared-token auth: every request must carry `Authorization: Bearer
-/// <token>` where `<token>` is one of the hub's configured device tokens.
-/// Intentionally simple for this stage - see `Config::device_tokens` for
-/// the provisioning model.
+/// <token>` for one of the hub's configured device tokens. See
+/// `Config::device_tokens` for the provisioning model.
 pub async fn require_device_token(
   State(state): State<Arc<AppState>>,
   req: Request,

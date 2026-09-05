@@ -14,14 +14,11 @@ use crate::state::AppState;
 
 /// `POST /changes` - push a batch of local changes.
 ///
-/// The happy path is plain optimistic concurrency: write conditioned on the
-/// client's `base_rev`. A stale `base_rev` (someone else changed the path
-/// first) is *not* rejected outright - instead the hub branches the revision
-/// tree (writes the client's edit as a new leaf via `new_edits:false`) and
-/// resolves the resulting conflict in-process, so the client always sees a
-/// resolved outcome and never has to merge anything itself. This is what
-/// keeps the "clients never see an unresolved conflict" guarantee true even
-/// when two devices reach the *same* hub.
+/// Writes are conditioned on the client's `base_rev`. A stale `base_rev` is
+/// not rejected outright: the hub *branches* the revision tree with the
+/// client's edit and resolves the conflict in-process, so the client always
+/// sees a resolved outcome and never has to merge - even when two devices
+/// reach the same hub.
 pub async fn post_changes(
   State(state): State<Arc<AppState>>,
   Json(pushes): Json<Vec<PushChange>>,
@@ -45,10 +42,9 @@ impl From<CouchError> for ApplyError {
 }
 
 impl ApplyError {
-  /// Maps an internal apply failure to the HTTP error the client sees. A
-  /// `Conflict` (bogus `base_rev`, blind delete) is the client's mistake, so
-  /// `409`; a CouchDB failure reuses the `From<CouchError>` mapping (409 for
-  /// a rev conflict, `502` for transport/backend problems).
+  /// `Conflict` (bogus `base_rev`, blind delete) is the client's mistake ->
+  /// 409; CouchDB failures reuse `From<CouchError>` (409 rev conflict, 502
+  /// backend/transport).
   fn into_api(self, path: &str) -> ApiError {
     match self {
       ApplyError::Conflict => ApiError(
@@ -134,10 +130,9 @@ async fn apply_upsert(state: &AppState, change: &PushChange) -> Result<String, A
   }
 }
 
-/// Branches the revision tree with the client's change (an edit or a
-/// tombstone) and resolves the resulting conflict in-process. Returns the
-/// current *winning* revision so the client converges immediately rather than
-/// holding a reference to the transient branch leaf it just created.
+/// Branch the tree with the client's change and resolve in-process; returns
+/// the winning rev so the client converges instead of pinning its transient
+/// branch leaf.
 async fn branch_and_resolve(
   state: &AppState,
   change: &PushChange,
@@ -168,8 +163,8 @@ async fn branch_and_resolve(
     },
   };
 
-  // Deterministic leaf hash so a retry of the same push branches to the
-  // same revision instead of piling up duplicate leaves.
+  // Deterministic leaf hash so a retried push branches to the same revision
+  // instead of piling up duplicate leaves.
   let mut seed = Vec::new();
   seed.extend_from_slice(change.base_rev.as_deref().unwrap_or_default().as_bytes());
   seed.push(0);
@@ -204,9 +199,8 @@ async fn branch_and_resolve(
   state.couch.put_revision(doc).await?;
 
   if let Err(e) = resolver::resolve(&state.couch, path).await {
-    // The branch is still in the tree; the watcher (or the client's next
-    // retry) will resolve it. Report conflict so the client keeps its
-    // local change and doesn't trust a stale rev.
+    // The branch stays in the tree for the watcher/retry; report conflict so
+    // the client keeps its local change and doesn't trust a stale rev.
     tracing::warn!(path = %path, error = %e, "post-branch resolve failed");
     return Err(ApplyError::Conflict);
   }

@@ -1,11 +1,11 @@
-//! OPFS-backed stores: `FileStore` (event content) and `MetaStore` (sync
-//! bookkeeping) over the browser's Origin Private File System.
+//! OPFS-backed stores: `FileStore` (content) and `MetaStore` (bookkeeping)
+//! over the browser's Origin Private File System.
 //!
-//! `OpfsFileStore` stores content at `content/<path>`; `OpfsMetaStore` stores
-//! one flat file per key at `meta/<url-encoded key>` (same shape as the
-//! desktop `FsMetaStore`). Neither preserves on-disk mtime - the web client
-//! doesn't scan a filesystem, it drives the engine directly, so mtime lives
-//! only in the sync metadata.
+//! Content lives at `content/<path>`; metadata is one flat file per key at
+//! `meta/<url-encoded key>` (same shape as the desktop `FsMetaStore`).
+//! Neither preserves an on-disk mtime - the web client drives the engine
+//! directly instead of scanning a filesystem, so mtime lives only in sync
+//! metadata.
 
 use async_trait::async_trait;
 use client_core::{FileStore, MetaStore, StoreError};
@@ -21,7 +21,7 @@ fn js_err(e: wasm_bindgen::JsValue) -> StoreError {
   StoreError::Io(format!("{e:?}"))
 }
 
-/// Awaits a `Promise`, then `dyn_into`s the resolved value to `T`.
+/// Awaits a `Promise`, then downcasts the resolved value to `T`.
 async fn await_promise<T: JsCast>(promise: Promise) -> Result<T, StoreError> {
   JsFuture::from(promise)
     .await
@@ -30,13 +30,12 @@ async fn await_promise<T: JsCast>(promise: Promise) -> Result<T, StoreError> {
     .map_err(js_err)
 }
 
-/// Awaits a `Promise` whose resolved value is ignored (e.g. `write`, `close`).
+/// Awaits a `Promise` whose resolved value is ignored (`write`, `close`).
 async fn await_void(promise: Promise) -> Result<(), StoreError> {
   JsFuture::from(promise).await.map_err(js_err)?;
   Ok(())
 }
 
-/// Whether a rejected JS value is a `NotFoundError` DOMException.
 fn is_not_found(e: &wasm_bindgen::JsValue) -> bool {
   js_sys::Reflect::get(e, &wasm_bindgen::JsValue::from_str("name"))
     .ok()
@@ -53,8 +52,8 @@ struct OpfsRoot {
 impl OpfsRoot {
   async fn open() -> Result<Self, StoreError> {
     // `navigator.storage.getDirectory()` exists on both Window and
-    // WorkerGlobalScope. Use the global scope (not `web_sys::window()`, which
-    // is `None` in a Web Worker) so the store works in the worker too.
+    // WorkerGlobalScope; read it off the global scope (not `web_sys::window()`,
+    // which is `None` in a worker) so this works inside a Web Worker.
     let global = js_sys::global();
     let navigator =
       Reflect::get(&global, &wasm_bindgen::JsValue::from_str("navigator")).map_err(js_err)?;

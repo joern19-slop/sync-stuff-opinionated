@@ -5,9 +5,8 @@ use std::sync::Arc;
 
 use crate::{error::ApiError, state::AppState};
 
-/// `GET /file/{path}` - the file's current content, streamed straight from
-/// its CouchDB attachment. `X-File-Rev` / `X-File-Mtime` let the client
-/// learn the revision and edit time without a second round trip.
+/// `GET /file/{path}` - streams the file's CouchDB attachment; `X-File-Rev`
+/// / `X-File-Mtime` carry its revision and edit time without a second trip.
 pub async fn get_file(
   State(state): State<Arc<AppState>>,
   Path(path): Path<String>,

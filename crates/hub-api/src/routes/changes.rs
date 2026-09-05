@@ -28,11 +28,9 @@ fn default_timeout() -> u64 {
 /// (and its CouchDB connection) per client.
 const MAX_TIMEOUT: u64 = 60;
 
-/// `GET /changes?since=<checkpoint>` - plain pass-through of CouchDB's
-/// `_changes` feed, reshaped into the client-facing contract. No merge or
-/// conflict-resolution logic here (Stage 5); a path with more than one
-/// leaf revision still surfaces as a single entry using CouchDB's current
-/// "winning" revision, same as `GET /file/{path}` would return.
+/// `GET /changes?since=<checkpoint>` - pass-through of CouchDB's `_changes`,
+/// reshaped into the client contract. A conflicted path surfaces as a single
+/// entry at CouchDB's winning revision, same as `GET /file/{path}`.
 pub async fn get_changes(
   State(state): State<Arc<AppState>>,
   Query(q): Query<ChangesQuery>,
@@ -41,11 +39,9 @@ pub async fn get_changes(
   Ok(Json(to_response(raw)))
 }
 
-/// `GET /changes/longpoll?since=<checkpoint>&timeout=<secs>` - like
-/// `GET /changes`, but blocks up to `timeout` seconds waiting for a change,
-/// returning immediately when one lands (or empty on timeout). This is the
-/// FCM-free, desktop-friendly "hub -> client" wake path: the client holds one
-/// cheap long-poll request instead of polling on a timer.
+/// `GET /changes/longpoll` - like `GET /changes`, but blocks up to `timeout`
+/// seconds, returning immediately when a change lands. The FCM-free wake
+/// path: the client holds one cheap long-poll instead of polling on a timer.
 pub async fn get_changes_longpoll(
   State(state): State<Arc<AppState>>,
   Query(q): Query<LongpollQuery>,
