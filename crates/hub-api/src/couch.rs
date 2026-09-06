@@ -27,7 +27,6 @@ pub struct PutResult {
 #[derive(Debug, Deserialize)]
 pub struct RawChangesResponse {
   pub results: Vec<RawChangeRow>,
-  /// CouchDB's `seq` shape varies by version/config - opaque, passed through.
   pub last_seq: serde_json::Value,
 }
 

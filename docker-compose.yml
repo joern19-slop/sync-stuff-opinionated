@@ -1,11 +1,5 @@
 # Local-development CouchDB for hub-api: a single standalone node.
 #
-# This used to spin up two nodes (a manual Stage-1 redundancy proof), but that
-# proof is now automated by `crates/hub-api/tests/replication_e2e.rs`
-# (testcontainers), and every e2e suite starts its own containers - nothing here
-# is needed to run the tests. This file just gives you a database to point
-# hub-api at while developing.
-#
 # Usage:
 #   docker compose up -d
 #   curl -u hub:hub-password localhost:5984/

@@ -1,12 +1,3 @@
-//! Line-based three-way merge (`diff3`).
-//!
-//! The merge itself is delegated to [`threeway_merge`], which wraps Git's
-//! own xdiff (`xdl_merge`, the engine behind `git merge-file`). This module
-//! keeps the resolver's conservative `merge` contract - any conflict or
-//! engine failure is an error (fail closed), so the caller falls back to the
-//! keep-one-copy-the-other path - plus the pure helpers for reconstructing
-//! rev ids and finding a common ancestor.
-
 use std::collections::HashSet;
 
 use threeway_merge::{merge_strings, MergeOptions};
@@ -15,8 +6,6 @@ use threeway_merge::{merge_strings, MergeOptions};
 pub enum MergeError {
   Conflict,
   NotText,
-  /// The underlying merge engine failed unexpectedly. Treated as a conflict
-  /// (fail closed) rather than a silent partial merge.
   Internal(String),
 }
 
@@ -32,6 +21,10 @@ impl std::fmt::Display for MergeError {
 
 impl std::error::Error for MergeError {}
 
+fn to_text(bytes: &[u8]) -> Result<&str, MergeError> {
+  std::str::from_utf8(bytes).map_err(|_| MergeError::NotText)
+}
+
 pub fn merge(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<Vec<u8>, MergeError> {
   let base = to_text(base)?;
   let mine = to_text(mine)?;
@@ -40,14 +33,10 @@ pub fn merge(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<Vec<u8>, MergeEr
   let result = merge_strings(base, mine, theirs, &MergeOptions::default())
     .map_err(|e| MergeError::Internal(e.to_string()))?;
 
-  if result.has_conflicts() {
-    return Err(MergeError::Conflict);
+  match result.has_conflicts() {
+    true => Err(MergeError::Conflict),
+    false => Ok(result.content.into_bytes()),
   }
-  Ok(result.content.into_bytes())
-}
-
-fn to_text(bytes: &[u8]) -> Result<&str, MergeError> {
-  std::str::from_utf8(bytes).map_err(|_| MergeError::NotText)
 }
 
 /// Reconstructs a full "N-hash" rev string from a `_revisions` entry.

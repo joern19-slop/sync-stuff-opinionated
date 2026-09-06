@@ -8,8 +8,8 @@
 //! "already resolved" and stops.
 
 use crate::couch::{CouchClient, Revisions};
-use crate::error::CouchError;
 use crate::diff3;
+use crate::error::CouchError;
 
 const MAX_RETRIES: usize = 5;
 
