@@ -15,12 +15,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 async-trait = { workspace = true }
 urlencoding = { workspace = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { workspace = true, default-features = false, features = ["json"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
@@ -28,7 +23,7 @@ wiremock = { workspace = true }
 testcontainers = { workspace = true }
 hub-api = { path = "../hub-api" }
 base64 = { workspace = true }
-axum = "0.7"
+axum = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [lib]

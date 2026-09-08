@@ -11,10 +11,10 @@ crate-type = ["cdylib", "rlib"]
 client-core = { path = "../client-core" }
 async-trait = { workspace = true }
 urlencoding = { workspace = true }
-wasm-bindgen = "0.2"
-js-sys = "0.3"
-wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = [
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = [
     "Blob",
     "File",
     "FileSystemDirectoryHandle",
@@ -34,7 +34,7 @@ web-sys = { version = "0.3", features = [
 e2e = []
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3"
+wasm-bindgen-test = { workspace = true }
 common = { path = "../common" }
 base64 = { workspace = true }
 serde_json = { workspace = true }

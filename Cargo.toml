@@ -17,7 +17,7 @@ license = "MIT"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -27,7 +27,20 @@ base64 = "0.22"
 bytes = "1"
 async-trait = "0.1"
 time = { version = "0.3", features = ["parsing"] }
+anyhow = "1"
+axum = "0.8.9"
+axum-extra = "0.12"
+threeway_merge = "0.1"
+inotify = "0.11"
+filetime = "0.2"
+mime_guess = "2"
+notify-rust = "4"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+web-sys = "0.3"
 
 # dev/test-only
 wiremock = "0.6"
 testcontainers = "0.23"
+wasm-bindgen-test = "0.3"
