@@ -16,7 +16,7 @@ anyhow = { workspace = true }
 inotify = { workspace = true }
 filetime = { workspace = true }
 mime_guess = { workspace = true }
-notify-rust = { workspace = true, default-features = false, features = ["d"] }
+notify-rust = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

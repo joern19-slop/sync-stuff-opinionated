@@ -41,8 +41,11 @@ pub fn merge(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<Vec<u8>, MergeEr
 
 /// Reconstructs a full "N-hash" rev string from a `_revisions` entry.
 pub fn revision_at(start: u64, ids: &[String], index: usize) -> Option<String> {
-  let gen = start.checked_sub(index as u64)?;
-  Some(format!("{gen}-{}", ids.get(index)?))
+  Some(format!(
+    "{}-{}",
+    start.checked_sub(index as u64)?,
+    ids.get(index)?
+  ))
 }
 
 /// Deepest common ancestor of two `_revisions` histories (newest first;
