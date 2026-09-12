@@ -7,24 +7,12 @@
 
 use std::time::Duration;
 
+use common::http_client::{HttpClient, HttpClientError, http_client};
 use protocol_types::{ChangesResponse, PushChange, PushResult};
-use reqwest::{RequestBuilder, StatusCode, Url};
-use thiserror::Error;
+use reqwest::{RequestBuilder, Url};
 
 /// Must outlast the hub's long-poll hold (up to 60s), with margin.
 const LONGPOLL_REQUEST_TIMEOUT: Duration = Duration::from_secs(65);
-
-#[derive(Debug, Error)]
-pub enum HubError {
-  #[error("http transport error: {0}")]
-  Transport(#[from] reqwest::Error),
-  #[error("hub returned {status}: {body}")]
-  Api { status: StatusCode, body: String },
-  #[error("unexpected response shape: {0}")]
-  Decode(String),
-  #[error("failed to build url, is base_url valid?")]
-  UrlBuild,
-}
 
 /// A file's content plus the metadata the hub attached to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,62 +25,59 @@ pub struct FileContent {
 
 #[derive(Clone)]
 pub struct HubClient {
-  http: reqwest::Client,
-  base_url: Url,
+  http_client: common::http_client::HttpClient,
   device_token: String,
 }
 
 impl HubClient {
-  fn build_url(&self, sub_path: &str) -> Result<Url, HubError> {
-    let mut url = self.base_url.clone();
-    let mut path_segements = url.path_segments_mut().map_err(|()| HubError::UrlBuild)?;
-    path_segements.push("/"); // Make sure the last segement is not replaced.
-    path_segements.push(sub_path);
-    drop(path_segements);
-    Ok(url)
+  async fn send_request(
+    &self,
+    builder: RequestBuilder,
+  ) -> Result<reqwest::Response, reqwest::Error> {
+    builder
+      .bearer_auth(&self.device_token)
+      .send()
+      .await?
+      .error_for_status()
   }
 
-  fn add_query_param(&self, url: &mut Url, key: &str, value: &str) {
-    let mut pairs = url.query_pairs_mut();
-    pairs.append_pair(key, value);
+  async fn send_and_parse<T: for<'de> serde::Deserialize<'de>>(
+    &self,
+    builder: RequestBuilder,
+  ) -> Result<T, HttpClientError> {
+    HttpClient::json_or_err(self.send_request(builder).await?).await
   }
 
-  async fn send_request(&self, builder: RequestBuilder) -> Result<reqwest::Response, reqwest::Error> {
-    builder.bearer_auth(&self.device_token).send().await?.error_for_status()
-  }
-
-  async fn send_and_parse<T: for<'de> serde::Deserialize<'de>>(&self, builder: RequestBuilder) -> Result<T, HubError> {
-      Self::json_or_err(self.send_request(builder).await?).await
-  }
-
-  fn header(resp: &reqwest::Response, name: &str) -> Result<String, HubError> {
+  fn header(resp: &reqwest::Response, name: &str) -> Result<String, HttpClientError> {
     let value = resp
-        .headers().get(name).ok_or_else(|| HubError::Decode(format!("Header {name} is missing.")))?
-        .to_str().map_err(|_| HubError::Decode(format!("Header {name} has an invalid value.")))?
-        .to_string();
+      .headers()
+      .get(name)
+      .ok_or_else(|| HttpClientError::Decode(format!("Header {name} is missing.")))?
+      .to_str()
+      .map_err(|_| HttpClientError::Decode(format!("Header {name} has an invalid value.")))?
+      .to_string();
     Ok(value)
   }
 
-  pub fn new(base_url: Url, device_token: impl Into<String>) -> Self {
-    Self {
-      http: common::http_client(),
-      base_url,
+  pub fn new(base_url: Url, device_token: impl Into<String>) -> Result<Self, HttpClientError> {
+    Ok(Self {
+      http_client: HttpClient::new(http_client(), base_url)?,
       device_token: device_token.into(),
-    }
+    })
   }
 
-  pub async fn metadata(&self) -> Result<String, HubError> {
-    let url = self.build_url("metadata")?;
-    self.send_and_parse(self.http.get(url)).await
+  pub async fn metadata(&self) -> Result<String, HttpClientError> {
+    let url = self.http_client.build_url("metadata")?.url;
+    self.send_and_parse(self.http_client.reqwest_client.get(url)).await
   }
 
   /// `GET /changes`; `None` means "from the beginning".
-  pub async fn changes(&self, since: Option<&str>) -> Result<ChangesResponse, HubError> {
-    let mut url = self.build_url("changes")?;
+  pub async fn changes(&self, since: Option<&str>) -> Result<ChangesResponse, HttpClientError> {
+    let mut url = self.http_client.build_url("changes")?;
     if let Some(s) = since {
-      self.add_query_param(&mut url, "since", s);
+      url.add_query_param("since", s);
     }
-    self.send_and_parse(self.http.get(url)).await
+    self.send_and_parse(self.http_client.reqwest_client.get(url.url)).await
   }
 
   /// `GET /changes/longpoll` - blocks up to `timeout_secs`, or returns
@@ -101,32 +86,34 @@ impl HubClient {
     &self,
     since: Option<&str>,
     timeout_secs: u64,
-  ) -> Result<ChangesResponse, HubError> {
-    let mut url = self.build_url("changes/longpoll")?;
-    self.add_query_param(&mut url, "timeout", &format!("{}", timeout_secs));
+  ) -> Result<ChangesResponse, HttpClientError> {
+    let mut url = self.http_client.build_url("changes/longpoll")?;
+    url.add_query_param("timeout", &format!("{}", timeout_secs));
     if let Some(since) = since {
-        self.add_query_param(&mut url, "since", since);
+      url.add_query_param("since", since);
     }
-    self.send_and_parse(self.http.get(url).timeout(LONGPOLL_REQUEST_TIMEOUT)).await
+    self
+      .send_and_parse(self.http_client.reqwest_client.get(url.url).timeout(LONGPOLL_REQUEST_TIMEOUT))
+      .await
   }
 
   /// `GET /file/{path}`. `Ok(None)` when the hub has no such file.
-  pub async fn get_file(&self, path: &str) -> Result<Option<FileContent>, HubError> {
-    let url = self.build_url(&format!("file/{}", encode_path(path)))?;
-    let response = match self.send_request(self.http.get(url)).await {
-        Err(err) => {
-            if err.status() == Some(reqwest::StatusCode::NOT_FOUND) {
-                return Ok(None)
-            }
-            return Err(err.into());
-        },
-        Ok(response) => response,
+  pub async fn get_file(&self, path: &str) -> Result<Option<FileContent>, HttpClientError> {
+    let url = self.http_client.build_url(&format!("file/{}", encode_path(path)))?;
+    let response = match self.send_request(self.http_client.reqwest_client.get(url.url)).await {
+      Err(err) => {
+        if err.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+          return Ok(None);
+        }
+        return Err(err.into());
+      }
+      Ok(response) => response,
     };
 
     let rev = Self::header(&response, "x-file-rev")?;
     let mtime = Self::header(&response, "x-file-mtime")?
       .parse::<i64>()
-      .map_err(|_| HubError::Decode("non-numeric x-file-mtime".into()))?;
+      .map_err(|_| HttpClientError::Decode("non-numeric x-file-mtime".into()))?;
     let content_type = Self::header(&response, "content-type")
       .unwrap_or_else(|_| "application/octet-stream".to_string());
     let content = response.bytes().await?.to_vec();
@@ -140,18 +127,26 @@ impl HubClient {
   }
 
   /// `POST /changes` - returns one result per input, in order.
-  pub async fn push(&self, changes: &[PushChange]) -> Result<Vec<PushResult>, HubError> {
-    let url = self.build_url("changes")?;
-    self.send_and_parse(self.http.post(url).json(changes)).await
+  pub async fn push(&self, changes: &[PushChange]) -> Result<Vec<PushResult>, HttpClientError> {
+    let url = self.http_client.build_url("changes")?.url;
+    self.send_and_parse(self.http_client.reqwest_client.post(url).json(changes)).await
   }
 
-  async fn json_or_err<T: for<'de> serde::Deserialize<'de>>(response: reqwest::Response) -> Result<T, HubError> {
+  async fn json_or_err<T: for<'de> serde::Deserialize<'de>>(
+    response: reqwest::Response,
+  ) -> Result<T, HttpClientError> {
     if response.status().is_success() {
-      response.json().await.map_err(|err| HubError::Decode(format!("{:?}", err)))
+      response
+        .json()
+        .await
+        .map_err(|err| HttpClientError::Decode(format!("{:?}", err)))
     } else {
       let status = response.status();
-      let body = response.text().await.unwrap_or("<failed to read body>".to_string());
-      Err(HubError::Api { status, body })
+      let body = response
+        .text()
+        .await
+        .unwrap_or("<failed to read body>".to_string());
+      Err(HttpClientError::Api { status, body })
     }
   }
 }
@@ -173,7 +168,7 @@ mod tests {
   use wiremock::{Mock, MockServer, ResponseTemplate};
 
   fn client(server: &MockServer) -> HubClient {
-    HubClient::new(Url::parse(&server.uri()).unwrap(), "dev-token")
+    HubClient::new(Url::parse(&server.uri()).unwrap(), "dev-token").unwrap()
   }
 
   #[test]
@@ -248,11 +243,13 @@ mod tests {
     assert_eq!(f.content_type, "text/plain");
     assert_eq!(f.content, b"hello");
 
-    assert!(client(&server)
-      .get_file("missing.txt")
-      .await
-      .unwrap()
-      .is_none());
+    assert!(
+      client(&server)
+        .get_file("missing.txt")
+        .await
+        .unwrap()
+        .is_none()
+    );
   }
 
   #[tokio::test]

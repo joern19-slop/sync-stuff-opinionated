@@ -1,6 +1,6 @@
 use std::{collections::HashSet, env::VarError, path::PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
 pub type EnvValue = String;
 

@@ -7,4 +7,6 @@ license.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 reqwest = { workspace = true, default-features = false, features = ["json"] }
-
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
