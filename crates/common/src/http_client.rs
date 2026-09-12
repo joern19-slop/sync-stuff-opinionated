@@ -3,7 +3,6 @@ use std::time::Duration;
 use reqwest::{StatusCode, Url};
 use thiserror::Error;
 
-
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 

@@ -18,7 +18,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use client_core::{HubClient, SyncEngine};
 use fs_store::{FsFileStore, FsMetaStore};
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tracing::info;
 
 #[tokio::main]

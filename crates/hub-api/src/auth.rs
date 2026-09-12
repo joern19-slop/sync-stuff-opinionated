@@ -5,8 +5,8 @@ use axum::{
   response::Response,
 };
 use axum_extra::{
-  headers::{authorization::Bearer, Authorization},
   TypedHeader,
+  headers::{Authorization, authorization::Bearer},
 };
 use std::sync::Arc;
 

@@ -207,12 +207,16 @@ mod tests {
     );
 
     // Path traversal is refused.
-    assert!(FileStore::put(&store, "../escape.txt", b"x".to_vec(), 1)
-      .await
-      .is_err());
-    assert!(FileStore::put(&store, "/abs.txt", b"x".to_vec(), 1)
-      .await
-      .is_err());
+    assert!(
+      FileStore::put(&store, "../escape.txt", b"x".to_vec(), 1)
+        .await
+        .is_err()
+    );
+    assert!(
+      FileStore::put(&store, "/abs.txt", b"x".to_vec(), 1)
+        .await
+        .is_err()
+    );
 
     FileStore::delete(&store, "notes/a.txt").await.unwrap();
     assert_eq!(FileStore::get(&store, "notes/a.txt").await.unwrap(), None);

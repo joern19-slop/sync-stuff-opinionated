@@ -1,10 +1,10 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use protocol_types::{PushChange, PushResult};
 use serde_json::json;
 use std::sync::Arc;
-use protocol_types::{PushChange, PushResult};
 
 use crate::couch::Revisions;
 use crate::error::{ApiError, CouchError};

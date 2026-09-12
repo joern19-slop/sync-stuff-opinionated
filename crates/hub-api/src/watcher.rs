@@ -168,8 +168,8 @@ fn describe_problem(job: &SchedulerJob, staleness_secs: u64) -> Option<&'static 
 /// Unparseable timestamps count as *not* stale - better to miss a report
 /// than to spam Discord on a format change.
 fn last_updated_stale(last_updated: &str, threshold_secs: u64) -> bool {
-  use time::format_description::well_known::Rfc3339;
   use time::OffsetDateTime;
+  use time::format_description::well_known::Rfc3339;
 
   let Ok(ts) = OffsetDateTime::parse(last_updated, &Rfc3339) else {
     return false;

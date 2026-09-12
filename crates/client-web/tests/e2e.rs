@@ -5,8 +5,8 @@
 //! `wasm-pack test` runs don't need a hub.
 #![cfg(feature = "e2e")]
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use client_web::{init, WebSync};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use client_web::{WebSync, init};
 use common::http_client;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -44,7 +44,11 @@ async fn push_to_hub(path: &str, content: &[u8]) {
     .send()
     .await
     .unwrap();
-  assert!(resp.status().is_success(), "inject failed: {}", resp.status());
+  assert!(
+    resp.status().is_success(),
+    "inject failed: {}",
+    resp.status()
+  );
 }
 
 /// Fetches a file directly from the hub (independent of local OPFS), returning
@@ -83,7 +87,12 @@ async fn push_pull_delete_roundtrip_through_the_hub() {
   // Pull: a file injected on the hub appears locally after a sync.
   push_to_hub(REMOTE_PATH, REMOTE_ICS).await;
   a.sync().await.unwrap();
-  assert!(a.list_files().await.unwrap().contains(&REMOTE_PATH.to_string()));
+  assert!(
+    a.list_files()
+      .await
+      .unwrap()
+      .contains(&REMOTE_PATH.to_string())
+  );
   assert_eq!(
     a.read_file(REMOTE_PATH).await.unwrap(),
     Some(REMOTE_ICS.to_vec())

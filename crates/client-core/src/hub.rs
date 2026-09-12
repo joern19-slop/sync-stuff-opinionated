@@ -68,7 +68,9 @@ impl HubClient {
 
   pub async fn metadata(&self) -> Result<String, HttpClientError> {
     let url = self.http_client.build_url("metadata")?.url;
-    self.send_and_parse(self.http_client.reqwest_client.get(url)).await
+    self
+      .send_and_parse(self.http_client.reqwest_client.get(url))
+      .await
   }
 
   /// `GET /changes`; `None` means "from the beginning".
@@ -77,7 +79,9 @@ impl HubClient {
     if let Some(s) = since {
       url.add_query_param("since", s);
     }
-    self.send_and_parse(self.http_client.reqwest_client.get(url.url)).await
+    self
+      .send_and_parse(self.http_client.reqwest_client.get(url.url))
+      .await
   }
 
   /// `GET /changes/longpoll` - blocks up to `timeout_secs`, or returns
@@ -93,14 +97,25 @@ impl HubClient {
       url.add_query_param("since", since);
     }
     self
-      .send_and_parse(self.http_client.reqwest_client.get(url.url).timeout(LONGPOLL_REQUEST_TIMEOUT))
+      .send_and_parse(
+        self
+          .http_client
+          .reqwest_client
+          .get(url.url)
+          .timeout(LONGPOLL_REQUEST_TIMEOUT),
+      )
       .await
   }
 
   /// `GET /file/{path}`. `Ok(None)` when the hub has no such file.
   pub async fn get_file(&self, path: &str) -> Result<Option<FileContent>, HttpClientError> {
-    let url = self.http_client.build_url(&format!("file/{}", encode_path(path)))?;
-    let response = match self.send_request(self.http_client.reqwest_client.get(url.url)).await {
+    let url = self
+      .http_client
+      .build_url(&format!("file/{}", encode_path(path)))?;
+    let response = match self
+      .send_request(self.http_client.reqwest_client.get(url.url))
+      .await
+    {
       Err(err) => {
         if err.status() == Some(reqwest::StatusCode::NOT_FOUND) {
           return Ok(None);
@@ -129,7 +144,9 @@ impl HubClient {
   /// `POST /changes` - returns one result per input, in order.
   pub async fn push(&self, changes: &[PushChange]) -> Result<Vec<PushResult>, HttpClientError> {
     let url = self.http_client.build_url("changes")?.url;
-    self.send_and_parse(self.http_client.reqwest_client.post(url).json(changes)).await
+    self
+      .send_and_parse(self.http_client.reqwest_client.post(url).json(changes))
+      .await
   }
 
   async fn json_or_err<T: for<'de> serde::Deserialize<'de>>(

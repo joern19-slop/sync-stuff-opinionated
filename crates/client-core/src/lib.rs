@@ -13,8 +13,8 @@ pub mod notify;
 pub mod store;
 
 pub use engine::{
-  checkpoint_key, file_key, FileMeta, PendingChange, PullReport, PushReport, SyncEngine, SyncError,
-  SyncReport, KEY_PENDING,
+  FileMeta, KEY_PENDING, PendingChange, PullReport, PushReport, SyncEngine, SyncError, SyncReport,
+  checkpoint_key, file_key,
 };
 pub use hub::{FileContent, HubClient, HubError};
 pub use notify::Notifier;

@@ -465,12 +465,14 @@ mod tests {
       .mount(&server)
       .await;
 
-    assert!(client(&server)
-      .await
-      .get_doc("missing.txt")
-      .await
-      .unwrap()
-      .is_none());
+    assert!(
+      client(&server)
+        .await
+        .get_doc("missing.txt")
+        .await
+        .unwrap()
+        .is_none()
+    );
   }
 
   #[tokio::test]

@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use crate::couch::CouchClient;
+use std::collections::HashSet;
 
 pub struct AppState {
   pub couch: CouchClient,

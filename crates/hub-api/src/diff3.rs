@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use threeway_merge::{merge_strings, MergeOptions};
+use threeway_merge::{MergeOptions, merge_strings};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeError {

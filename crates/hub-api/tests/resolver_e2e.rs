@@ -4,9 +4,9 @@
 //!
 //! Run explicitly: `cargo test --test resolver_e2e -- --ignored --nocapture`
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use hub_api::resolver::{self, Outcome, ResolutionKind};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hub_api::couch::CouchClient;
+use hub_api::resolver::{self, Outcome, ResolutionKind};
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};

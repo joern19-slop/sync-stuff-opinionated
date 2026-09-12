@@ -10,10 +10,10 @@
 
 use std::collections::HashSet;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hub_api::config::Config;
-use serde_json::json;
 use protocol_types::{ChangesResponse, PushResult};
+use serde_json::json;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
@@ -116,10 +116,12 @@ async fn push_then_pull_then_fetch_roundtrips_a_file() {
     .unwrap();
   assert!(resp.status().is_success());
   let changes: ChangesResponse = resp.json().await.unwrap();
-  assert!(changes
-    .changes
-    .iter()
-    .any(|c| c.path == "notes/hello.txt" && !c.deleted));
+  assert!(
+    changes
+      .changes
+      .iter()
+      .any(|c| c.path == "notes/hello.txt" && !c.deleted)
+  );
 
   // Fetching the file returns exactly what was pushed.
   let resp = http
@@ -210,10 +212,12 @@ async fn deleting_a_file_removes_it_and_surfaces_as_a_tombstone_in_changes() {
     .await
     .unwrap();
   let changes: ChangesResponse = resp.json().await.unwrap();
-  assert!(changes
-    .changes
-    .iter()
-    .any(|c| c.path == "to-delete.txt" && c.deleted));
+  assert!(
+    changes
+      .changes
+      .iter()
+      .any(|c| c.path == "to-delete.txt" && c.deleted)
+  );
 }
 
 async fn push_text(

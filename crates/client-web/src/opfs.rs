@@ -57,8 +57,8 @@ impl OpfsRoot {
     let global = js_sys::global();
     let navigator =
       Reflect::get(&global, &wasm_bindgen::JsValue::from_str("navigator")).map_err(js_err)?;
-    let storage = Reflect::get(&navigator, &wasm_bindgen::JsValue::from_str("storage"))
-      .map_err(js_err)?;
+    let storage =
+      Reflect::get(&navigator, &wasm_bindgen::JsValue::from_str("storage")).map_err(js_err)?;
     let storage: web_sys::StorageManager = storage.dyn_into().map_err(js_err)?;
     let handle: FileSystemDirectoryHandle = await_promise(storage.get_directory()).await?;
     Ok(Self { handle })
@@ -66,7 +66,11 @@ impl OpfsRoot {
 
   /// Walks `path` (slash-separated), creating intermediate directories when
   /// `create` is set, and returns the file handle for the last segment.
-  async fn file_handle(&self, path: &str, create: bool) -> Result<FileSystemFileHandle, StoreError> {
+  async fn file_handle(
+    &self,
+    path: &str,
+    create: bool,
+  ) -> Result<FileSystemFileHandle, StoreError> {
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let Some((last, parents)) = parts.split_last() else {
       return Err(StoreError::Io("empty path".into()));
@@ -156,8 +160,8 @@ impl OpfsRoot {
       if done {
         break;
       }
-      let value = Reflect::get(&result, &wasm_bindgen::JsValue::from_str("value"))
-        .map_err(js_err)?;
+      let value =
+        Reflect::get(&result, &wasm_bindgen::JsValue::from_str("value")).map_err(js_err)?;
       let pair = Array::from(&value);
       let Some(name) = pair.get(0).as_string() else {
         continue;

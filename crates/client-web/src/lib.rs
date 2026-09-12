@@ -24,7 +24,11 @@ pub struct WebSync {
 impl WebSync {
   /// Push then pull.
   pub async fn sync(&self) -> Result<(), JsValue> {
-    self.engine.sync().await.map_err(|e| JsValue::from_str(&e.to_string()))?;
+    self
+      .engine
+      .sync()
+      .await
+      .map_err(|e| JsValue::from_str(&e.to_string()))?;
     Ok(())
   }
 

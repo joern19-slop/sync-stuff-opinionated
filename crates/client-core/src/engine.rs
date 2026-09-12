@@ -15,9 +15,9 @@
 
 use std::sync::Arc;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use serde::{Deserialize, Serialize};
+use base64::engine::general_purpose::STANDARD;
 use protocol_types::{ChangeEntry, PushChange};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::hub::{FileContent, HubClient, HubError};
@@ -248,7 +248,10 @@ impl SyncEngine {
     if results.len() == changes.len() {
       self
         .meta
-        .put(KEY_PENDING, serde_json::to_vec(&Vec::<PendingChange>::new()).unwrap())
+        .put(
+          KEY_PENDING,
+          serde_json::to_vec(&Vec::<PendingChange>::new()).unwrap(),
+        )
         .await?;
     }
 

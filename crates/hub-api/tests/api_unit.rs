@@ -5,8 +5,8 @@
 use std::collections::HashSet;
 
 use hub_api::config::Config;
-use serde_json::json;
 use protocol_types::ChangesResponse;
+use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -92,14 +92,18 @@ async fn get_changes_maps_couchdb_changes_feed_into_the_api_contract() {
   assert_eq!(body.checkpoint, "17-xyz");
   // The design doc must never surface as a file change.
   assert_eq!(body.changes.len(), 2);
-  assert!(body
-    .changes
-    .iter()
-    .any(|c| c.path == "notes/a.txt" && !c.deleted && c.rev == "3-abc"));
-  assert!(body
-    .changes
-    .iter()
-    .any(|c| c.path == "gone.txt" && c.deleted));
+  assert!(
+    body
+      .changes
+      .iter()
+      .any(|c| c.path == "notes/a.txt" && !c.deleted && c.rev == "3-abc")
+  );
+  assert!(
+    body
+      .changes
+      .iter()
+      .any(|c| c.path == "gone.txt" && c.deleted)
+  );
 }
 
 #[tokio::test]

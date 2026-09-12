@@ -1,8 +1,8 @@
-use axum::extract::{Query, State};
 use axum::Json;
+use axum::extract::{Query, State};
+use protocol_types::{ChangeEntry, ChangesResponse};
 use serde::Deserialize;
 use std::sync::Arc;
-use protocol_types::{ChangeEntry, ChangesResponse};
 
 use crate::couch::RawChangesResponse;
 

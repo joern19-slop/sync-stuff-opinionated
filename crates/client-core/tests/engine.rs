@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use client_core::{
-  checkpoint_key, file_key, FileMeta, FileStore, HubClient, MemStore, MetaStore, Notifier,
-  StoreError, SyncEngine, SyncError,
+  FileMeta, FileStore, HubClient, MemStore, MetaStore, Notifier, StoreError, SyncEngine, SyncError,
+  checkpoint_key, file_key,
 };
 use serde_json::json;
 use wiremock::matchers::{bearer_token, method, path, query_param, query_param_is_missing};
@@ -102,14 +102,18 @@ async fn pull_writes_batch_and_advances_checkpoint() {
       .unwrap(),
     b"cp-1"
   );
-  assert!(MetaStore::get(&mem, &file_key("a.txt"))
-    .await
-    .unwrap()
-    .is_some());
-  assert!(MetaStore::get(&mem, &file_key("b.txt"))
-    .await
-    .unwrap()
-    .is_some());
+  assert!(
+    MetaStore::get(&mem, &file_key("a.txt"))
+      .await
+      .unwrap()
+      .is_some()
+  );
+  assert!(
+    MetaStore::get(&mem, &file_key("b.txt"))
+      .await
+      .unwrap()
+      .is_some()
+  );
   assert_eq!(
     FileStore::get(&mem, "a.txt").await.unwrap(),
     Some(b"A".to_vec())
@@ -228,14 +232,18 @@ async fn checkpoint_is_not_advanced_when_batch_fails_partway() {
   // First pull dies writing b.txt's metadata.
   assert!(engine.pull().await.is_err());
   // a.txt landed, but the checkpoint must not have advanced.
-  assert!(MetaStore::get(&mem, &file_key("a.txt"))
-    .await
-    .unwrap()
-    .is_some());
-  assert!(MetaStore::get(&mem, &checkpoint_key(&server.uri()))
-    .await
-    .unwrap()
-    .is_none());
+  assert!(
+    MetaStore::get(&mem, &file_key("a.txt"))
+      .await
+      .unwrap()
+      .is_some()
+  );
+  assert!(
+    MetaStore::get(&mem, &checkpoint_key(&server.uri()))
+      .await
+      .unwrap()
+      .is_none()
+  );
 
   // Retry: same batch re-pulls (idempotent), completes, checkpoint lands.
   let report = engine.pull().await.unwrap();
@@ -309,10 +317,12 @@ async fn push_error_keeps_local_change_queued() {
   let pending = engine.pending().await.unwrap();
   assert_eq!(pending.len(), 1);
   assert_eq!(pending[0].path, "a.txt");
-  assert!(MetaStore::get(&mem, &file_key("a.txt"))
-    .await
-    .unwrap()
-    .is_some());
+  assert!(
+    MetaStore::get(&mem, &file_key("a.txt"))
+      .await
+      .unwrap()
+      .is_some()
+  );
   assert_eq!(
     FileStore::get(&mem, "a.txt").await.unwrap(),
     Some(b"hello".to_vec())
@@ -339,10 +349,12 @@ async fn delete_removes_local_file_and_pushes_a_delete() {
   engine.push().await.unwrap(); // get it to rev 2-b, clear pending
 
   engine.record_delete("a.txt", 2).await.unwrap();
-  assert!(MetaStore::get(&mem, &file_key("a.txt"))
-    .await
-    .unwrap()
-    .is_none());
+  assert!(
+    MetaStore::get(&mem, &file_key("a.txt"))
+      .await
+      .unwrap()
+      .is_none()
+  );
   assert!(FileStore::get(&mem, "a.txt").await.unwrap().is_none());
 
   engine.push().await.unwrap();
