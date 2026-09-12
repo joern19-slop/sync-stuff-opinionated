@@ -49,3 +49,9 @@ pub struct PushResult {
   pub path: String,
   pub rev: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Metadata {
+  // Passed through from couchdb. Unique Id of the server.
+  pub uuid: String,
+}

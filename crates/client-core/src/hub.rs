@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use protocol_types::{ChangesResponse, PushChange, PushResult};
+use reqwest::{RequestBuilder, StatusCode, Url};
 use thiserror::Error;
 
 /// Must outlast the hub's long-poll hold (up to 60s), with margin.
@@ -18,9 +19,11 @@ pub enum HubError {
   #[error("http transport error: {0}")]
   Transport(#[from] reqwest::Error),
   #[error("hub returned {status}: {body}")]
-  Api { status: u16, body: String },
+  Api { status: StatusCode, body: String },
   #[error("unexpected response shape: {0}")]
   Decode(String),
+  #[error("failed to build url, is base_url valid?")]
+  UrlBuild,
 }
 
 /// A file's content plus the metadata the hub attached to it.
@@ -35,40 +38,61 @@ pub struct FileContent {
 #[derive(Clone)]
 pub struct HubClient {
   http: reqwest::Client,
-  base_url: String,
+  base_url: Url,
   device_token: String,
 }
 
 impl HubClient {
-  pub fn new(base_url: impl Into<String>, device_token: impl Into<String>) -> Self {
+  fn build_url(&self, sub_path: &str) -> Result<Url, HubError> {
+    let mut url = self.base_url.clone();
+    let mut path_segements = url.path_segments_mut().map_err(|()| HubError::UrlBuild)?;
+    path_segements.push("/"); // Make sure the last segement is not replaced.
+    path_segements.push(sub_path);
+    drop(path_segements);
+    Ok(url)
+  }
+
+  fn add_query_param(&self, url: &mut Url, key: &str, value: &str) {
+    let mut pairs = url.query_pairs_mut();
+    pairs.append_pair(key, value);
+  }
+
+  async fn send_request(&self, builder: RequestBuilder) -> Result<reqwest::Response, reqwest::Error> {
+    builder.bearer_auth(&self.device_token).send().await?.error_for_status()
+  }
+
+  async fn send_and_parse<T: for<'de> serde::Deserialize<'de>>(&self, builder: RequestBuilder) -> Result<T, HubError> {
+      Self::json_or_err(self.send_request(builder).await?).await
+  }
+
+  fn header(resp: &reqwest::Response, name: &str) -> Result<String, HubError> {
+    let value = resp
+        .headers().get(name).ok_or_else(|| HubError::Decode(format!("Header {name} is missing.")))?
+        .to_str().map_err(|_| HubError::Decode(format!("Header {name} has an invalid value.")))?
+        .to_string();
+    Ok(value)
+  }
+
+  pub fn new(base_url: Url, device_token: impl Into<String>) -> Self {
     Self {
       http: common::http_client(),
-      base_url: base_url.into(),
+      base_url,
       device_token: device_token.into(),
     }
   }
 
-  /// Stable identifier for this hub; keys its checkpoint. For now, the base
-  /// URL.
-  pub fn id(&self) -> &str {
-    &self.base_url
+  pub async fn metadata(&self) -> Result<String, HubError> {
+    let url = self.build_url("metadata")?;
+    self.send_and_parse(self.http.get(url)).await
   }
 
   /// `GET /changes`; `None` means "from the beginning".
   pub async fn changes(&self, since: Option<&str>) -> Result<ChangesResponse, HubError> {
-    let mut url = format!("{}/changes", self.base_url.trim_end_matches('/'));
+    let mut url = self.build_url("changes")?;
     if let Some(s) = since {
-      url.push_str("?since=");
-      url.push_str(&urlencoding::encode(s));
+      self.add_query_param(&mut url, "since", s);
     }
-    let resp = self
-      .http
-      .get(&url)
-      .bearer_auth(&self.device_token)
-      .timeout(common::REQUEST_TIMEOUT)
-      .send()
-      .await?;
-    Self::json_or_err(resp).await
+    self.send_and_parse(self.http.get(url)).await
   }
 
   /// `GET /changes/longpoll` - blocks up to `timeout_secs`, or returns
@@ -78,53 +102,34 @@ impl HubClient {
     since: Option<&str>,
     timeout_secs: u64,
   ) -> Result<ChangesResponse, HubError> {
-    let mut url = format!(
-      "{}/changes/longpoll?timeout={timeout_secs}",
-      self.base_url.trim_end_matches('/')
-    );
-    if let Some(s) = since {
-      url.push_str("&since=");
-      url.push_str(&urlencoding::encode(s));
+    let mut url = self.build_url("changes/longpoll")?;
+    self.add_query_param(&mut url, "timeout", &format!("{}", timeout_secs));
+    if let Some(since) = since {
+        self.add_query_param(&mut url, "since", since);
     }
-    let resp = self
-      .http
-      .get(&url)
-      .bearer_auth(&self.device_token)
-      .timeout(LONGPOLL_REQUEST_TIMEOUT)
-      .send()
-      .await?;
-    Self::json_or_err(resp).await
+    self.send_and_parse(self.http.get(url).timeout(LONGPOLL_REQUEST_TIMEOUT)).await
   }
 
   /// `GET /file/{path}`. `Ok(None)` when the hub has no such file.
   pub async fn get_file(&self, path: &str) -> Result<Option<FileContent>, HubError> {
-    let url = format!(
-      "{}/file/{}",
-      self.base_url.trim_end_matches('/'),
-      encode_path(path)
-    );
-    let resp = self
-      .http
-      .get(&url)
-      .bearer_auth(&self.device_token)
-      .timeout(common::REQUEST_TIMEOUT)
-      .send()
-      .await?;
+    let url = self.build_url(&format!("file/{}", encode_path(path)))?;
+    let response = match self.send_request(self.http.get(url)).await {
+        Err(err) => {
+            if err.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+                return Ok(None)
+            }
+            return Err(err.into());
+        },
+        Ok(response) => response,
+    };
 
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-      return Ok(None);
-    }
-    if !resp.status().is_success() {
-      return Err(Self::api_err(resp).await);
-    }
-
-    let rev = Self::header(&resp, "x-file-rev")?;
-    let mtime = Self::header(&resp, "x-file-mtime")?
+    let rev = Self::header(&response, "x-file-rev")?;
+    let mtime = Self::header(&response, "x-file-mtime")?
       .parse::<i64>()
       .map_err(|_| HubError::Decode("non-numeric x-file-mtime".into()))?;
-    let content_type = Self::header(&resp, "content-type")
+    let content_type = Self::header(&response, "content-type")
       .unwrap_or_else(|_| "application/octet-stream".to_string());
-    let content = resp.bytes().await?.to_vec();
+    let content = response.bytes().await?.to_vec();
 
     Ok(Some(FileContent {
       rev,
@@ -136,41 +141,18 @@ impl HubClient {
 
   /// `POST /changes` - returns one result per input, in order.
   pub async fn push(&self, changes: &[PushChange]) -> Result<Vec<PushResult>, HubError> {
-    let url = format!("{}/changes", self.base_url.trim_end_matches('/'));
-    let resp = self
-      .http
-      .post(&url)
-      .bearer_auth(&self.device_token)
-      .timeout(common::REQUEST_TIMEOUT)
-      .json(changes)
-      .send()
-      .await?;
-    Self::json_or_err(resp).await
+    let url = self.build_url("changes")?;
+    self.send_and_parse(self.http.post(url).json(changes)).await
   }
 
-  fn header(resp: &reqwest::Response, name: &str) -> Result<String, HubError> {
-    resp
-      .headers()
-      .get(name)
-      .and_then(|v| v.to_str().ok())
-      .map(String::from)
-      .ok_or_else(|| HubError::Decode(format!("missing {name} header")))
-  }
-
-  async fn api_err(resp: reqwest::Response) -> HubError {
-    let status = resp.status().as_u16();
-    let body = resp.text().await.unwrap_or_default();
-    HubError::Api { status, body }
-  }
-
-  async fn json_or_err<T: for<'de> serde::Deserialize<'de>>(
-    resp: reqwest::Response,
-  ) -> Result<T, HubError> {
-    if !resp.status().is_success() {
-      return Err(Self::api_err(resp).await);
+  async fn json_or_err<T: for<'de> serde::Deserialize<'de>>(response: reqwest::Response) -> Result<T, HubError> {
+    if response.status().is_success() {
+      response.json().await.map_err(|err| HubError::Decode(format!("{:?}", err)))
+    } else {
+      let status = response.status();
+      let body = response.text().await.unwrap_or("<failed to read body>".to_string());
+      Err(HubError::Api { status, body })
     }
-    let text = resp.text().await?;
-    serde_json::from_str(&text).map_err(|e| HubError::Decode(format!("{e}: {text}")))
   }
 }
 
@@ -191,7 +173,7 @@ mod tests {
   use wiremock::{Mock, MockServer, ResponseTemplate};
 
   fn client(server: &MockServer) -> HubClient {
-    HubClient::new(server.uri(), "dev-token")
+    HubClient::new(Url::parse(&server.uri()).unwrap(), "dev-token")
   }
 
   #[test]
